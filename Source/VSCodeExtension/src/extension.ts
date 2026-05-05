@@ -1,22 +1,27 @@
 import * as vscode from 'vscode';
-import { loadCliConfiguration, saveCliConfiguration, getConfigPath, CliConfiguration } from './CliConfiguration';
+import { loadCliConfiguration, saveCliConfiguration, getConfigPath, CliConfiguration, CliContext } from './CliConfiguration';
 import { ChronicleClientManager } from './ChronicleClientManager';
 import { ChronicleTreeDataProvider } from './providers/ChronicleTreeDataProvider';
 
 let clientManager: ChronicleClientManager | undefined;
 
+function resolveActiveContext(config: CliConfiguration): { ctxName: string | undefined; ctx: CliContext | undefined } {
+    let ctxName = config.activeContext;
+    let ctx = ctxName ? config.contexts[ctxName] : undefined;
+    if (!ctxName && Object.keys(config.contexts).length > 0) {
+        ctxName = Object.keys(config.contexts)[0];
+        ctx = config.contexts[ctxName];
+    }
+    return { ctxName, ctx };
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     let config = loadCliConfiguration();
-    let activeContextName = config.activeContext;
-    let activeContext = activeContextName ? config.contexts[activeContextName] : undefined;
+    const { ctxName: initialCtxName, ctx: initialCtx } = resolveActiveContext(config);
+    let activeContextName = initialCtxName;
 
-    if (!activeContextName && Object.keys(config.contexts).length > 0) {
-        activeContextName = Object.keys(config.contexts)[0];
-        activeContext = config.contexts[activeContextName];
-    }
-
-    if (activeContext) {
-        clientManager = new ChronicleClientManager(activeContext);
+    if (initialCtx) {
+        clientManager = new ChronicleClientManager(initialCtx);
         try {
             await clientManager.connect();
         } catch {
@@ -41,13 +46,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const connectCmd = vscode.commands.registerCommand('narrator.connect', async () => {
         let currentConfig = loadCliConfiguration();
-        let ctxName = currentConfig.activeContext;
-        let ctx = ctxName ? currentConfig.contexts[ctxName] : undefined;
-
-        if (!ctxName && Object.keys(currentConfig.contexts).length > 0) {
-            ctxName = Object.keys(currentConfig.contexts)[0];
-            ctx = currentConfig.contexts[ctxName];
-        }
+        let { ctxName, ctx } = resolveActiveContext(currentConfig);
 
         if (!ctx?.server) {
             const server = await vscode.window.showInputBox({
@@ -163,8 +162,12 @@ function updateStatusBar(
     const name = contextName ?? 'default';
     if (connecting) {
         item.text = `$(plug~spin) Chronicle: Connecting...`;
-    } else {
+        item.tooltip = `Connecting to Chronicle (${name})`;
+    } else if (connected) {
         item.text = `$(plug) Chronicle: ${name}`;
+        item.tooltip = `Connected to Chronicle (${name})`;
+    } else {
+        item.text = `$(debug-disconnect) Chronicle: ${name}`;
+        item.tooltip = `Not connected to Chronicle (${name}) — click to switch context`;
     }
-    item.tooltip = connected ? `Connected to Chronicle (${name})` : `Not connected (${name})`;
 }
