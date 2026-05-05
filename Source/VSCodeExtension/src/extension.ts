@@ -90,7 +90,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const currentConfig = loadCliConfiguration(getEffectiveConfigPath());
         const contextNames = Object.keys(currentConfig.contexts);
         if (contextNames.length === 0) {
-            vscode.window.showWarningMessage('No contexts found in ~/.cratis/config.json');
+            const configLocation = getEffectiveConfigPath() ?? getConfigPath();
+            vscode.window.showWarningMessage(`No contexts found in ${configLocation}`);
             return;
         }
 
