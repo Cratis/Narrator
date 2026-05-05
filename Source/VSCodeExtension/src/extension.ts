@@ -15,8 +15,13 @@ function resolveActiveContext(config: CliConfiguration): { ctxName: string | und
     return { ctxName, ctx };
 }
 
+function getEffectiveConfigPath(): string | undefined {
+    const setting = vscode.workspace.getConfiguration('narrator').get<string>('configPath');
+    return setting && setting.trim() !== '' ? setting.trim() : undefined;
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-    let config = loadCliConfiguration();
+    let config = loadCliConfiguration(getEffectiveConfigPath());
     const { ctxName: initialCtxName, ctx: initialCtx } = resolveActiveContext(config);
     let activeContextName = initialCtxName;
 
@@ -45,7 +50,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
 
     const connectCmd = vscode.commands.registerCommand('narrator.connect', async () => {
-        let currentConfig = loadCliConfiguration();
+        let currentConfig = loadCliConfiguration(getEffectiveConfigPath());
         let { ctxName, ctx } = resolveActiveContext(currentConfig);
 
         if (!ctx?.server) {
@@ -62,7 +67,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 currentConfig.activeContext = ctxName;
             }
             currentConfig.contexts[ctxName].server = server;
-            saveCliConfiguration(currentConfig);
+            saveCliConfiguration(currentConfig, getEffectiveConfigPath());
             ctx = currentConfig.contexts[ctxName];
         }
 
@@ -82,7 +87,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
 
     const setContextCmd = vscode.commands.registerCommand('narrator.setContext', async () => {
-        const currentConfig = loadCliConfiguration();
+        const currentConfig = loadCliConfiguration(getEffectiveConfigPath());
         const contextNames = Object.keys(currentConfig.contexts);
         if (contextNames.length === 0) {
             vscode.window.showWarningMessage('No contexts found in ~/.cratis/config.json');
@@ -97,7 +102,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
 
         currentConfig.activeContext = selected;
-        saveCliConfiguration(currentConfig);
+        saveCliConfiguration(currentConfig, getEffectiveConfigPath());
 
         const newContext = currentConfig.contexts[selected];
         clientManager?.disconnect();
@@ -119,9 +124,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.executeCommand('workbench.action.openSettings', 'narrator');
     });
 
-    const configWatcher = vscode.workspace.createFileSystemWatcher(getConfigPath());
+    const effectiveConfigPath = getEffectiveConfigPath() ?? getConfigPath();
+    const configWatcher = vscode.workspace.createFileSystemWatcher(effectiveConfigPath);
     configWatcher.onDidChange(async () => {
-        const updatedConfig = loadCliConfiguration();
+        const updatedConfig = loadCliConfiguration(getEffectiveConfigPath());
         const ctxName = updatedConfig.activeContext;
         const ctx = ctxName ? updatedConfig.contexts[ctxName] : undefined;
         if (ctx) {
