@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ChronicleClientManager } from '../ChronicleClientManager';
+import { Configuration } from '../Configuration';
 
 // ── Item types ───────────────────────────────────────────────────────────────
 
@@ -160,15 +161,26 @@ export class ChronicleTreeDataProvider implements vscode.TreeDataProvider<Chroni
 
     private _clientManager: ChronicleClientManager | undefined;
     private _activeContextName: string | undefined;
+    private _config: Configuration;
 
-    constructor(clientManager: ChronicleClientManager | undefined, activeContextName?: string) {
+    constructor(
+        clientManager: ChronicleClientManager | undefined,
+        activeContextName: string | undefined,
+        config: Configuration
+    ) {
         this._clientManager = clientManager;
         this._activeContextName = activeContextName;
+        this._config = config;
     }
 
-    setClientManager(manager: ChronicleClientManager | undefined, activeContextName?: string): void {
+    setClientManager(
+        manager: ChronicleClientManager | undefined,
+        activeContextName?: string,
+        config?: Configuration
+    ): void {
         this._clientManager = manager;
         this._activeContextName = activeContextName;
+        if (config) { this._config = config; }
         this.refresh();
     }
 
@@ -301,19 +313,45 @@ export class ChronicleTreeDataProvider implements vscode.TreeDataProvider<Chroni
     }
 
     private _getRootChildren(): ChronicleTreeItem[] {
-        if (!this._clientManager?.isConnected) {
-            return [
-                new ChronicleTreeItem(
-                    'Not connected — click to configure',
-                    'noConnection',
-                    vscode.TreeItemCollapsibleState.None
-                ),
-            ];
+        const contextNames = Object.keys(this._config.contexts);
+        if (contextNames.length === 0) {
+            const item = new ChronicleTreeItem(
+                'No contexts — click \u002B to add one',
+                'noConnection',
+                vscode.TreeItemCollapsibleState.None
+            );
+            item.command = { command: 'narrator.addContext', title: 'Add Context' };
+            return [item];
         }
-        const label = `Active Context: ${this._activeContextName ?? 'default'}`;
-        return [
-            new ChronicleTreeItem(label, 'context', vscode.TreeItemCollapsibleState.Collapsed),
-        ];
+
+        return contextNames.map(name => {
+            const ctx = this._config.contexts[name];
+            const isActive = name === this._activeContextName;
+            const isConnected = isActive && (this._clientManager?.isConnected ?? false);
+
+            let description: string;
+            if (isActive && isConnected) {
+                description = 'connected';
+            } else if (isActive) {
+                description = 'not connected';
+            } else {
+                description = ctx.server ?? '';
+            }
+
+            const item = new ChronicleTreeItem(
+                name,
+                'context',
+                isActive && isConnected
+                    ? vscode.TreeItemCollapsibleState.Collapsed
+                    : vscode.TreeItemCollapsibleState.None,
+                { description, tooltip: ctx.server }
+            );
+            item.contextValue = isActive ? 'contextActive' : 'context';
+            if (!isActive) {
+                item.command = { command: 'narrator.activateContext', title: 'Set as Active', arguments: [item] };
+            }
+            return item;
+        });
     }
 
     private async _getEventStores(): Promise<ChronicleTreeItem[]> {

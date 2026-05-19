@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-export interface CliContext {
+export interface Context {
     server?: string;
     eventStore?: string;
     namespace?: string;
@@ -14,26 +14,26 @@ export interface CliContext {
     loggedInUser?: string;
 }
 
-export interface CliConfiguration {
+export interface Configuration {
     activeContext?: string;
-    contexts: Record<string, CliContext>;
+    contexts: Record<string, Context>;
 }
 
 export function getConfigPath(): string {
     return path.join(os.homedir(), '.cratis', 'config.json');
 }
 
-export function loadCliConfiguration(configPath?: string): CliConfiguration {
+export function loadConfiguration(configPath?: string): Configuration {
     const filePath = configPath ?? getConfigPath();
     try {
         const raw = fs.readFileSync(filePath, 'utf-8');
-        return JSON.parse(raw) as CliConfiguration;
+        return JSON.parse(raw) as Configuration;
     } catch {
         return { contexts: {} };
     }
 }
 
-export function saveCliConfiguration(config: CliConfiguration, configPath?: string): void {
+export function saveConfiguration(config: Configuration, configPath?: string): void {
     const filePath = configPath ?? getConfigPath();
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) {

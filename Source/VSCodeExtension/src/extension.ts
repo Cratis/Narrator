@@ -1,11 +1,16 @@
+// Copyright (c) Cratis. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
 import * as vscode from 'vscode';
-import { loadCliConfiguration, saveCliConfiguration, getConfigPath, CliConfiguration, CliContext } from './CliConfiguration';
+import { loadConfiguration, saveConfiguration, getConfigPath, Configuration, Context } from './Configuration';
 import { ChronicleClientManager } from './ChronicleClientManager';
 import { ChronicleTreeDataProvider } from './providers/ChronicleTreeDataProvider';
+import { updateStatusBar } from './StatusBar';
+import { ExtensionState, registerContextCommands } from './ContextCommands';
 
-let clientManager: ChronicleClientManager | undefined;
+let _state: ExtensionState | undefined;
 
-function resolveActiveContext(config: CliConfiguration): { ctxName: string | undefined; ctx: CliContext | undefined } {
+function resolveActiveContext(config: Configuration): { ctxName: string | undefined; ctx: Context | undefined } {
     let ctxName = config.activeContext;
     let ctx = ctxName ? config.contexts[ctxName] : undefined;
     if (!ctxName && Object.keys(config.contexts).length > 0) {
@@ -21,20 +26,29 @@ function getEffectiveConfigPath(): string | undefined {
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-    let config = loadCliConfiguration(getEffectiveConfigPath());
+    const outputChannel = vscode.window.createOutputChannel('Chronicle');
+    outputChannel.appendLine('Narrator extension activated');
+    context.subscriptions.push(outputChannel);
+
+    const config = loadConfiguration(getEffectiveConfigPath());
     const { ctxName: initialCtxName, ctx: initialCtx } = resolveActiveContext(config);
-    let activeContextName = initialCtxName;
+
+    _state = {
+        clientManager: undefined,
+        activeContextName: initialCtxName,
+        outputChannel,
+    };
 
     if (initialCtx) {
-        clientManager = new ChronicleClientManager(initialCtx);
+        _state.clientManager = new ChronicleClientManager(initialCtxName!, initialCtx, outputChannel);
         try {
-            await clientManager.connect();
-        } catch {
-            // Silently ignore connection errors on startup
+            await _state.clientManager.connect();
+        } catch (err) {
+            outputChannel.appendLine(`[Chronicle] Startup connection error: ${err}`);
         }
     }
 
-    const treeDataProvider = new ChronicleTreeDataProvider(clientManager, activeContextName);
+    const treeDataProvider = new ChronicleTreeDataProvider(_state.clientManager, _state.activeContextName, config);
     const treeView = vscode.window.createTreeView('narratorExplorer', {
         treeDataProvider,
         showCollapseAll: true,
@@ -42,7 +56,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     statusBar.command = 'narrator.setContext';
-    updateStatusBar(statusBar, activeContextName, clientManager?.isConnected ?? false);
+    updateStatusBar(statusBar, _state.activeContextName, _state.clientManager?.isConnected ?? false);
     statusBar.show();
 
     const refreshCmd = vscode.commands.registerCommand('narrator.refresh', () => {
@@ -50,7 +64,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
 
     const connectCmd = vscode.commands.registerCommand('narrator.connect', async () => {
-        let currentConfig = loadCliConfiguration(getEffectiveConfigPath());
+        let currentConfig = loadConfiguration(getEffectiveConfigPath());
         let { ctxName, ctx } = resolveActiveContext(currentConfig);
 
         if (!ctx?.server) {
@@ -58,66 +72,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 prompt: 'Enter Chronicle server URL',
                 placeHolder: 'chronicle://localhost:35000',
             });
-            if (!server) {
-                return;
-            }
+            if (!server) { return; }
             if (!ctxName) {
                 ctxName = 'default';
                 currentConfig.contexts[ctxName] = {};
                 currentConfig.activeContext = ctxName;
             }
             currentConfig.contexts[ctxName].server = server;
-            saveCliConfiguration(currentConfig, getEffectiveConfigPath());
+            saveConfiguration(currentConfig, getEffectiveConfigPath());
             ctx = currentConfig.contexts[ctxName];
         }
 
-        clientManager?.disconnect();
-        clientManager = new ChronicleClientManager(ctx!);
+        _state!.clientManager?.disconnect();
+        _state!.clientManager = new ChronicleClientManager(ctxName!, ctx!, outputChannel);
         updateStatusBar(statusBar, ctxName, false, true);
         try {
-            await clientManager.connect();
-            treeDataProvider.setClientManager(clientManager, ctxName);
+            await _state!.clientManager.connect();
+            treeDataProvider.setClientManager(_state!.clientManager, ctxName);
             updateStatusBar(statusBar, ctxName, true);
             vscode.window.showInformationMessage(`Connected to Chronicle (${ctxName})`);
         } catch (err) {
-            treeDataProvider.setClientManager(undefined);
+            outputChannel.appendLine(`[Chronicle] Connect error: ${err}`);
+            treeDataProvider.setClientManager(undefined, undefined, currentConfig);
             updateStatusBar(statusBar, ctxName, false);
             vscode.window.showErrorMessage(`Failed to connect: ${err instanceof Error ? err.message : String(err)}`);
-        }
-    });
-
-    const setContextCmd = vscode.commands.registerCommand('narrator.setContext', async () => {
-        const currentConfig = loadCliConfiguration(getEffectiveConfigPath());
-        const contextNames = Object.keys(currentConfig.contexts);
-        if (contextNames.length === 0) {
-            const configLocation = getEffectiveConfigPath() ?? getConfigPath();
-            vscode.window.showWarningMessage(`No contexts found in ${configLocation}`);
-            return;
-        }
-
-        const selected = await vscode.window.showQuickPick(contextNames, {
-            placeHolder: 'Select active context',
-        });
-        if (!selected) {
-            return;
-        }
-
-        currentConfig.activeContext = selected;
-        saveCliConfiguration(currentConfig, getEffectiveConfigPath());
-
-        const newContext = currentConfig.contexts[selected];
-        clientManager?.disconnect();
-        clientManager = new ChronicleClientManager(newContext);
-        updateStatusBar(statusBar, selected, false, true);
-        try {
-            await clientManager.connect();
-            treeDataProvider.setClientManager(clientManager, selected);
-            updateStatusBar(statusBar, selected, true);
-            vscode.window.showInformationMessage(`Switched to context: ${selected}`);
-        } catch (err) {
-            treeDataProvider.setClientManager(undefined);
-            updateStatusBar(statusBar, selected, false);
-            vscode.window.showErrorMessage(`Failed to connect to context "${selected}": ${err instanceof Error ? err.message : String(err)}`);
         }
     });
 
@@ -125,22 +103,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.executeCommand('workbench.action.openSettings', 'narrator');
     });
 
+    const contextDisposables = registerContextCommands(_state, statusBar, treeDataProvider, getEffectiveConfigPath);
+
+    if (Object.keys(config.contexts).length === 0) {
+        vscode.window.showInformationMessage(
+            'No Chronicle contexts found. Add one to get started.',
+            'Add Context'
+        ).then(choice => {
+            if (choice === 'Add Context') {
+                vscode.commands.executeCommand('narrator.addContext');
+            }
+        });
+    }
+
     const effectiveConfigPath = getEffectiveConfigPath() ?? getConfigPath();
     const configWatcher = vscode.workspace.createFileSystemWatcher(effectiveConfigPath);
     configWatcher.onDidChange(async () => {
-        const updatedConfig = loadCliConfiguration(getEffectiveConfigPath());
+        const updatedConfig = loadConfiguration(getEffectiveConfigPath());
         const ctxName = updatedConfig.activeContext;
         const ctx = ctxName ? updatedConfig.contexts[ctxName] : undefined;
-        if (ctx) {
-            clientManager?.disconnect();
-            clientManager = new ChronicleClientManager(ctx);
+        if (ctx && ctxName) {
+            _state!.clientManager?.disconnect();
+            _state!.clientManager = new ChronicleClientManager(ctxName, ctx, outputChannel);
             try {
-                await clientManager.connect();
-            } catch {
-                // Ignore
+                await _state!.clientManager.connect();
+            } catch (err) {
+                outputChannel.appendLine(`[Chronicle] Config watcher reconnect error: ${err}`);
             }
-            treeDataProvider.setClientManager(clientManager, ctxName);
-            updateStatusBar(statusBar, ctxName, clientManager.isConnected);
+            treeDataProvider.setClientManager(_state!.clientManager, ctxName, updatedConfig);
+            updateStatusBar(statusBar, ctxName, _state!.clientManager.isConnected);
         }
     });
 
@@ -149,32 +140,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         statusBar,
         refreshCmd,
         connectCmd,
-        setContextCmd,
         openSettingsCmd,
+        ...contextDisposables,
         configWatcher
     );
 }
 
 export function deactivate(): void {
-    clientManager?.disconnect();
-    clientManager = undefined;
-}
-
-function updateStatusBar(
-    item: vscode.StatusBarItem,
-    contextName: string | undefined,
-    connected: boolean,
-    connecting = false
-): void {
-    const name = contextName ?? 'default';
-    if (connecting) {
-        item.text = `$(plug~spin) Chronicle: Connecting...`;
-        item.tooltip = `Connecting to Chronicle (${name})`;
-    } else if (connected) {
-        item.text = `$(plug) Chronicle: ${name}`;
-        item.tooltip = `Connected to Chronicle (${name})`;
-    } else {
-        item.text = `$(debug-disconnect) Chronicle: ${name}`;
-        item.tooltip = `Not connected to Chronicle (${name}) — click to switch context`;
-    }
+    _state?.clientManager?.disconnect();
+    _state = undefined;
 }

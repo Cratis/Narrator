@@ -50,6 +50,26 @@
             {
                 "command": "narrator.openSettings",
                 "title": "Open Narrator Settings"
+            },
+            {
+                "command": "narrator.addContext",
+                "title": "Add Context",
+                "icon": "$(add)"
+            },
+            {
+                "command": "narrator.editContext",
+                "title": "Edit Context",
+                "icon": "$(edit)"
+            },
+            {
+                "command": "narrator.deleteContext",
+                "title": "Delete Context",
+                "icon": "$(trash)"
+            },
+            {
+                "command": "narrator.activateContext",
+                "title": "Set as Active",
+                "icon": "$(check)"
             }
         ],
         "menus": {
@@ -60,9 +80,26 @@
                     "group": "navigation"
                 },
                 {
-                    "command": "narrator.connect",
+                    "command": "narrator.addContext",
                     "when": "view == narratorExplorer",
                     "group": "navigation"
+                }
+            ],
+            "view/item/context": [
+                {
+                    "command": "narrator.activateContext",
+                    "when": "view == narratorExplorer && viewItem == context",
+                    "group": "inline@1"
+                },
+                {
+                    "command": "narrator.editContext",
+                    "when": "view == narratorExplorer && viewItem =~ /^context/",
+                    "group": "1_manage@1"
+                },
+                {
+                    "command": "narrator.deleteContext",
+                    "when": "view == narratorExplorer && viewItem =~ /^context/",
+                    "group": "1_manage@2"
                 }
             ]
         },
