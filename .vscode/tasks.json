@@ -1,0 +1,62 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "compile",
+            "type": "shell",
+            "command": "node esbuild.mjs",
+            "options": {
+                "cwd": "${workspaceFolder}/Source/VSCodeExtension"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "silent"
+            }
+        },
+        {
+            "label": "watch",
+            "type": "shell",
+            "command": "node esbuild.mjs --watch",
+            "options": {
+                "cwd": "${workspaceFolder}/Source/VSCodeExtension"
+            },
+            "group": "build",
+            "isBackground": true,
+            "problemMatcher": {
+                "owner": "esbuild",
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "\\[watch\\]",
+                    "endsPattern": "\\[esbuild\\] watching"
+                },
+                "pattern": {
+                    "regexp": "^(.*):(\\d+):(\\d+): (error|warning): (.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            },
+            "presentation": {
+                "reveal": "never"
+            }
+        },
+        {
+            "label": "typecheck",
+            "type": "shell",
+            "command": "yarn typecheck",
+            "options": {
+                "cwd": "${workspaceFolder}/Source/VSCodeExtension"
+            },
+            "group": "test",
+            "problemMatcher": "$tsc",
+            "presentation": {
+                "reveal": "silent"
+            }
+        }
+    ]
+}

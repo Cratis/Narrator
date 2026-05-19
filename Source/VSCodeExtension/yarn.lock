@@ -130,6 +130,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@bufbuild/protobuf@npm:^2.12.0":
+  version: 2.12.0
+  resolution: "@bufbuild/protobuf@npm:2.12.0"
+  checksum: 10c0/28959e371fd2e7c8d67d52af9e3c8f8e6770e2e116dcc5508f469ca736afa6905e216bc76183835898a5f3deb8aa2e7db47d4a0e706fba76115e9a1996893191
+  languageName: node
+  linkType: hard
+
 "@cratis/chronicle.contracts@npm:15.22.13":
   version: 15.22.13
   resolution: "@cratis/chronicle.contracts@npm:15.22.13"
@@ -1797,6 +1804,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "narrator@workspace:."
   dependencies:
+    "@bufbuild/protobuf": "npm:^2.12.0"
     "@cratis/chronicle.contracts": "npm:15.22.13"
     "@types/node": "npm:^20.0.0"
     "@types/vscode": "npm:^1.85.0"
