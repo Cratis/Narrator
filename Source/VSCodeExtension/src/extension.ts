@@ -8,6 +8,7 @@ import { ChronicleTreeDataProvider, ChronicleTreeItem } from './providers/Chroni
 import { DetailsTreeDataProvider } from './providers/DetailsTreeDataProvider';
 import { updateStatusBar } from './StatusBar';
 import { ExtensionState, registerContextCommands } from './ContextCommands';
+import { registerEditorCommands } from './EditorCommands';
 import { applyProtoPatches } from './ProtoPatches';
 
 applyProtoPatches();
@@ -119,6 +120,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
 
     const contextDisposables = registerContextCommands(_state, statusBar, treeDataProvider, getEffectiveConfigPath);
+    const editorDisposables = registerEditorCommands();
 
     if (Object.keys(config.contexts).length === 0) {
         vscode.window.showInformationMessage(
@@ -158,6 +160,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         connectCmd,
         openSettingsCmd,
         ...contextDisposables,
+        ...editorDisposables,
         configWatcher
     );
 }

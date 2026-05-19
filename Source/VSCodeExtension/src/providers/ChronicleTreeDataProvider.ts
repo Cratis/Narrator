@@ -74,6 +74,9 @@ export class ChronicleTreeItem extends vscode.TreeItem {
         this.eventStoreName = opts?.eventStoreName;
         this.namespaceName = opts?.namespaceName;
         this.details = opts?.details;
+        // contextValue powers the `viewItem ==` clauses in package.json menus.
+        // The root context items override this with `context` / `contextActive` for their own actions.
+        this.contextValue = itemType;
         if (opts?.description) { this.description = opts.description; }
         if (opts?.tooltip) { this.tooltip = opts.tooltip; }
 

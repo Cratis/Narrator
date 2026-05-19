@@ -118,16 +118,29 @@ export interface IdentityInfo {
 export interface EventTypeInfo {
     id: string;
     generation: number;
+    tombstone?: boolean;
+    schema?: unknown;
+    schemaRaw?: string;
 }
 
 export interface ReadModelTypeInfo {
     identifier: string;
     displayName: string;
+    containerName?: string;
+    schema?: unknown;
+    schemaRaw?: string;
+    indexes?: string[];
+    owner?: string;
+    source?: string;
+    observerType?: string;
+    observerIdentifier?: string;
 }
 
 export interface ProjectionInfo {
     identifier: string;
     readModel: string;
+    containerName?: string;
+    declaration?: string;
 }
 
 const OBSERVER_TYPE_NAMES = ['Unknown', 'Reactor', 'Projection', 'Reducer', 'External'];
@@ -145,9 +158,21 @@ const JOB_STATUS_NAMES = [
     'Failed',
     'Removing',
 ];
+const READ_MODEL_OBSERVER_TYPE_NAMES = ['NotSet', 'Reducer', 'Projection'];
+const READ_MODEL_OWNER_NAMES = ['None', 'Client', 'Server'];
+const READ_MODEL_SOURCE_NAMES = ['Unknown', 'Code', 'User'];
 
 function nameFor(values: readonly string[], code: number): string {
     return values[code] ?? `Unknown(${code})`;
+}
+
+function tryParseJson(text: string | undefined): unknown {
+    if (!text) { return undefined; }
+    try {
+        return JSON.parse(text);
+    } catch {
+        return undefined;
+    }
 }
 
 export class ChronicleClientManager {
@@ -462,39 +487,90 @@ export class ChronicleClientManager {
     async listEventTypes(eventStore: string): Promise<EventTypeInfo[]> {
         const s = this._services;
         if (!s) { return []; }
-        type Item = { Id?: string; Generation?: number };
+        type Item = {
+            Type?: { Id?: string; Generation?: number; Tombstone?: boolean };
+            Schema?: string;
+        };
         type Resp = { items?: Item[] };
-        const call = s.eventTypes.getAll.bind(s.eventTypes) as GrpcUnaryMethod<object, Resp>;
+        const call = s.eventTypes.getAllRegistrations.bind(s.eventTypes) as GrpcUnaryMethod<object, Resp>;
         const resp = await grpcCall(call, { EventStore: eventStore });
         return (resp?.items ?? []).map((et) => ({
-            id: et.Id ?? '(unknown)',
-            generation: et.Generation ?? 1,
+            id: et.Type?.Id ?? '(unknown)',
+            generation: et.Type?.Generation ?? 1,
+            tombstone: et.Type?.Tombstone ?? false,
+            schema: tryParseJson(et.Schema),
+            schemaRaw: et.Schema,
         }));
     }
 
     async listReadModelTypes(eventStore: string): Promise<ReadModelTypeInfo[]> {
         const s = this._services;
         if (!s) { return []; }
-        type Item = { Identifier?: string; DisplayName?: string };
+        type Item = {
+            Type?: { Identifier?: string; Generation?: number };
+            ContainerName?: string;
+            DisplayName?: string;
+            Schema?: string;
+            Indexes?: { PropertyPath?: string }[];
+            ObserverType?: number;
+            ObserverIdentifier?: string;
+            Owner?: number;
+            Source?: number;
+        };
         type Resp = { ReadModels?: Item[] };
         const call = s.readModels.getDefinitions.bind(s.readModels) as GrpcUnaryMethod<object, Resp>;
         const resp = await grpcCall(call, { EventStore: eventStore });
-        return (resp?.ReadModels ?? []).map((rm) => ({
-            identifier: rm.Identifier ?? '(unknown)',
-            displayName: rm.DisplayName ?? rm.Identifier ?? '(unknown)',
-        }));
+        return (resp?.ReadModels ?? []).map((rm) => {
+            const identifier = rm.Type?.Identifier ?? '(unknown)';
+            return {
+                identifier,
+                displayName: rm.DisplayName ?? identifier,
+                containerName: rm.ContainerName,
+                schema: tryParseJson(rm.Schema),
+                schemaRaw: rm.Schema,
+                indexes: (rm.Indexes ?? []).map((idx) => idx.PropertyPath ?? '').filter((p) => p !== ''),
+                owner: nameFor(READ_MODEL_OWNER_NAMES, rm.Owner ?? 0),
+                source: nameFor(READ_MODEL_SOURCE_NAMES, rm.Source ?? 0),
+                observerType: nameFor(READ_MODEL_OBSERVER_TYPE_NAMES, rm.ObserverType ?? 0),
+                observerIdentifier: rm.ObserverIdentifier,
+            };
+        });
     }
 
     async listProjections(eventStore: string): Promise<ProjectionInfo[]> {
         const s = this._services;
         if (!s) { return []; }
-        type Item = { Identifier?: string; ReadModel?: string };
-        type Resp = { items?: Item[] };
-        const call = s.projections.getAllDefinitions.bind(s.projections) as GrpcUnaryMethod<object, Resp>;
-        const resp = await grpcCall(call, { EventStore: eventStore });
-        return (resp?.items ?? []).map((p) => ({
-            identifier: p.Identifier ?? '(unknown)',
-            readModel: p.ReadModel ?? '',
-        }));
+        type DefinitionItem = { Identifier?: string; ReadModel?: string };
+        type DefinitionResp = { items?: DefinitionItem[] };
+        type DeclarationItem = { Identifier?: string; ContainerName?: string; Declaration?: string };
+        type DeclarationResp = { items?: DeclarationItem[] };
+
+        const definitionsCall = s.projections.getAllDefinitions.bind(s.projections) as GrpcUnaryMethod<object, DefinitionResp>;
+        const declarationsCall = s.projections.getAllDeclarations.bind(s.projections) as GrpcUnaryMethod<object, DeclarationResp>;
+
+        // Definitions carry the ReadModel association; declarations carry the DSL text. Fetch both
+        // in parallel and merge by Identifier so each projection has the structured and source view.
+        const [definitions, declarations] = await Promise.all([
+            grpcCall(definitionsCall, { EventStore: eventStore }),
+            grpcCall(declarationsCall, { EventStore: eventStore }),
+        ]);
+
+        const declarationsByIdentifier = new Map<string, DeclarationItem>();
+        for (const decl of declarations?.items ?? []) {
+            if (decl.Identifier) {
+                declarationsByIdentifier.set(decl.Identifier, decl);
+            }
+        }
+
+        return (definitions?.items ?? []).map((definition) => {
+            const identifier = definition.Identifier ?? '(unknown)';
+            const decl = declarationsByIdentifier.get(identifier);
+            return {
+                identifier,
+                readModel: definition.ReadModel ?? '',
+                containerName: decl?.ContainerName,
+                declaration: decl?.Declaration,
+            };
+        });
     }
 }

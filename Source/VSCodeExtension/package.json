@@ -74,6 +74,21 @@
                 "command": "narrator.activateContext",
                 "title": "Set as Active",
                 "icon": "$(check)"
+            },
+            {
+                "command": "narrator.openEventTypeSchema",
+                "title": "Open Schema",
+                "icon": "$(json)"
+            },
+            {
+                "command": "narrator.openReadModelSchema",
+                "title": "Open Schema",
+                "icon": "$(json)"
+            },
+            {
+                "command": "narrator.openProjectionDeclaration",
+                "title": "Open Declaration",
+                "icon": "$(file-code)"
             }
         ],
         "menus": {
@@ -104,6 +119,21 @@
                     "command": "narrator.deleteContext",
                     "when": "view == narratorExplorer && viewItem =~ /^context/",
                     "group": "1_manage@2"
+                },
+                {
+                    "command": "narrator.openEventTypeSchema",
+                    "when": "view == narratorExplorer && viewItem == eventType",
+                    "group": "inline@1"
+                },
+                {
+                    "command": "narrator.openReadModelSchema",
+                    "when": "view == narratorExplorer && viewItem == readModelType",
+                    "group": "inline@1"
+                },
+                {
+                    "command": "narrator.openProjectionDeclaration",
+                    "when": "view == narratorExplorer && viewItem == projection",
+                    "group": "inline@1"
                 }
             ]
         },
