@@ -47,12 +47,12 @@ You can also override the config path in VS Code settings:
 
 ```bash
 cd Source/VSCodeExtension
-corepack yarn install --immutable
-corepack yarn compile
+yarn install --immutable
+yarn compile
 ```
 
 To package:
 ```bash
-corepack yarn vscode:prepublish
-corepack yarn exec vsce package
+yarn vscode:prepublish
+yarn exec vsce package
 ```
