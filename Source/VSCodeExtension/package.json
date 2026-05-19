@@ -30,6 +30,10 @@
                 {
                     "id": "narratorExplorer",
                     "name": "Chronicle Explorer"
+                },
+                {
+                    "id": "narratorDetails",
+                    "name": "Details"
                 }
             ]
         },

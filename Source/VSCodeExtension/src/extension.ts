@@ -4,7 +4,8 @@
 import * as vscode from 'vscode';
 import { loadConfiguration, saveConfiguration, getConfigPath, Configuration, Context } from './Configuration';
 import { ChronicleClientManager } from './ChronicleClientManager';
-import { ChronicleTreeDataProvider } from './providers/ChronicleTreeDataProvider';
+import { ChronicleTreeDataProvider, ChronicleTreeItem } from './providers/ChronicleTreeDataProvider';
+import { DetailsTreeDataProvider } from './providers/DetailsTreeDataProvider';
 import { updateStatusBar } from './StatusBar';
 import { ExtensionState, registerContextCommands } from './ContextCommands';
 import { applyProtoPatches } from './ProtoPatches';
@@ -55,6 +56,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const treeView = vscode.window.createTreeView('narratorExplorer', {
         treeDataProvider,
         showCollapseAll: true,
+    });
+
+    const detailsProvider = new DetailsTreeDataProvider();
+    const detailsView = vscode.window.createTreeView('narratorDetails', {
+        treeDataProvider: detailsProvider,
+        showCollapseAll: true,
+    });
+
+    treeView.onDidChangeSelection((event) => {
+        const selected = event.selection.find((item): item is ChronicleTreeItem => item instanceof ChronicleTreeItem);
+        detailsProvider.show(selected?.details);
     });
 
     const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -140,6 +152,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     context.subscriptions.push(
         treeView,
+        detailsView,
         statusBar,
         refreshCmd,
         connectCmd,

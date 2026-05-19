@@ -46,10 +46,16 @@ type ItemType =
 
 // ── Tree item ────────────────────────────────────────────────────────────────
 
+export interface ChronicleTreeItemDetails {
+    title: string;
+    data: Record<string, unknown>;
+}
+
 export class ChronicleTreeItem extends vscode.TreeItem {
     readonly itemType: ItemType;
     readonly eventStoreName?: string;
     readonly namespaceName?: string;
+    readonly details?: ChronicleTreeItemDetails;
 
     constructor(
         label: string,
@@ -60,12 +66,14 @@ export class ChronicleTreeItem extends vscode.TreeItem {
             namespaceName?: string;
             description?: string;
             tooltip?: string;
+            details?: ChronicleTreeItemDetails;
         }
     ) {
         super(label, collapsibleState);
         this.itemType = itemType;
         this.eventStoreName = opts?.eventStoreName;
         this.namespaceName = opts?.namespaceName;
+        this.details = opts?.details;
         if (opts?.description) { this.description = opts.description; }
         if (opts?.tooltip) { this.tooltip = opts.tooltip; }
 
@@ -125,7 +133,17 @@ function folder(label: string, type: ItemType, eventStore: string, namespace?: s
     });
 }
 
-function leaf(label: string, type: ItemType, opts?: { eventStoreName?: string; namespaceName?: string; description?: string; tooltip?: string }): ChronicleTreeItem {
+function leaf(
+    label: string,
+    type: ItemType,
+    opts?: {
+        eventStoreName?: string;
+        namespaceName?: string;
+        description?: string;
+        tooltip?: string;
+        details?: ChronicleTreeItemDetails;
+    },
+): ChronicleTreeItem {
     return new ChronicleTreeItem(label, type, vscode.TreeItemCollapsibleState.None, opts);
 }
 
@@ -225,13 +243,21 @@ export class ChronicleTreeDataProvider implements vscode.TreeDataProvider<Chroni
             case 'recommendationsFolder':
                 return loadItems(
                     () => mgr!.listRecommendations(es, ns),
-                    (r) => leaf(r.name, 'recommendation', { description: r.type, tooltip: `ID: ${r.id}` })
+                    (r) => leaf(r.name, 'recommendation', {
+                        description: r.type,
+                        tooltip: `ID: ${r.id}`,
+                        details: { title: `Recommendation: ${r.name}`, data: { ...r } },
+                    })
                 );
 
             case 'jobsFolder':
                 return loadItems(
                     () => mgr!.listJobs(es, ns),
-                    (j) => leaf(j.type || j.id, 'job', { description: `Status: ${j.status}`, tooltip: `ID: ${j.id}` })
+                    (j) => leaf(j.type || j.id, 'job', {
+                        description: `Status: ${j.status}`,
+                        tooltip: `ID: ${j.id}`,
+                        details: { title: `Job: ${j.type || j.id}`, data: { ...j } },
+                    })
                 );
 
             case 'sequencesFolder':
@@ -240,13 +266,20 @@ export class ChronicleTreeDataProvider implements vscode.TreeDataProvider<Chroni
             case 'observersFolder':
                 return loadItems(
                     () => mgr!.listObservers(es, ns),
-                    (o) => leaf(o.id, 'observer', { description: `State: ${o.runningState}` })
+                    (o) => leaf(o.id, 'observer', {
+                        description: `${o.type} · ${o.runningState}`,
+                        details: { title: `Observer: ${o.id}`, data: { ...o } },
+                    })
                 );
 
             case 'failedPartitionsFolder':
                 return loadItems(
                     () => mgr!.listFailedPartitions(es, ns),
-                    (fp) => leaf(fp.partition, 'failedPartition', { description: `Observer: ${fp.observerId}`, tooltip: `ID: ${fp.id}` })
+                    (fp) => leaf(fp.partition, 'failedPartition', {
+                        description: `Observer: ${fp.observerId}`,
+                        tooltip: `ID: ${fp.id}`,
+                        details: { title: `Failed Partition: ${fp.partition}`, data: { ...fp } },
+                    })
                 );
 
             case 'readModelsFolder':
@@ -258,7 +291,11 @@ export class ChronicleTreeDataProvider implements vscode.TreeDataProvider<Chroni
                     (i) => {
                         const label = i.name || i.userName || i.subject;
                         const desc = i.name && i.userName && i.name !== i.userName ? i.userName : undefined;
-                        return leaf(label, 'identity', { description: desc, tooltip: `Subject: ${i.subject}` });
+                        return leaf(label, 'identity', {
+                            description: desc,
+                            tooltip: `Subject: ${i.subject}`,
+                            details: { title: `Identity: ${label}`, data: { ...i } },
+                        });
                     }
                 );
 
@@ -278,19 +315,28 @@ export class ChronicleTreeDataProvider implements vscode.TreeDataProvider<Chroni
             case 'eventTypesFolder':
                 return loadItems(
                     () => mgr!.listEventTypes(es),
-                    (et) => leaf(et.id, 'eventType', { description: `v${et.generation}` })
+                    (et) => leaf(et.id, 'eventType', {
+                        description: `v${et.generation}`,
+                        details: { title: `Event Type: ${et.id}`, data: { ...et } },
+                    })
                 );
 
             case 'readModelTypesFolder':
                 return loadItems(
                     () => mgr!.listReadModelTypes(es),
-                    (rm) => leaf(rm.displayName, 'readModelType', { description: rm.identifier !== rm.displayName ? rm.identifier : undefined })
+                    (rm) => leaf(rm.displayName, 'readModelType', {
+                        description: rm.identifier !== rm.displayName ? rm.identifier : undefined,
+                        details: { title: `Read Model: ${rm.displayName}`, data: { ...rm } },
+                    })
                 );
 
             case 'projectionsFolder':
                 return loadItems(
                     () => mgr!.listProjections(es),
-                    (p) => leaf(p.identifier, 'projection', { description: p.readModel })
+                    (p) => leaf(p.identifier, 'projection', {
+                        description: p.readModel,
+                        details: { title: `Projection: ${p.identifier}`, data: { ...p } },
+                    })
                 );
 
             case 'generalSeedDataFolder':
@@ -344,7 +390,24 @@ export class ChronicleTreeDataProvider implements vscode.TreeDataProvider<Chroni
                 isActive && isConnected
                     ? vscode.TreeItemCollapsibleState.Collapsed
                     : vscode.TreeItemCollapsibleState.None,
-                { description, tooltip: ctx.server }
+                {
+                    description,
+                    tooltip: ctx.server,
+                    details: {
+                        title: `Context: ${name}`,
+                        data: {
+                            name,
+                            active: isActive,
+                            connected: isConnected,
+                            server: ctx.server,
+                            eventStore: ctx.eventStore,
+                            namespace: ctx.namespace,
+                            clientId: ctx.clientId,
+                            managementPort: ctx.managementPort,
+                            loggedInUser: ctx.loggedInUser,
+                        },
+                    },
+                }
             );
             item.contextValue = isActive ? 'contextActive' : 'context';
             if (!isActive) {

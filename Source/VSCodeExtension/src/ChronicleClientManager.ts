@@ -60,22 +60,47 @@ function grpcCall<TReq, TResp>(
     });
 }
 
+export interface ObserverEventTypeInfo {
+    id: string;
+    generation: number;
+    tombstone: boolean;
+}
+
 export interface ObserverInfo {
     id: string;
     type: string;
+    typeCode: number;
+    owner: string;
+    ownerCode: number;
     runningState: string;
+    runningStateCode: number;
+    eventSequenceId: string;
+    nextEventSequenceNumber: number;
+    lastHandledEventSequenceNumber: number;
+    isSubscribed: boolean;
+    isReplayable: boolean;
+    eventTypes: ObserverEventTypeInfo[];
+}
+
+export interface FailedPartitionAttemptInfo {
+    occurred?: string;
+    sequenceNumber: number;
+    messages: string[];
+    stackTrace: string;
 }
 
 export interface FailedPartitionInfo {
     id: string;
     observerId: string;
     partition: string;
+    attempts: FailedPartitionAttemptInfo[];
 }
 
 export interface JobInfo {
     id: string;
     type: string;
     status: string;
+    statusCode: number;
 }
 
 export interface RecommendationInfo {
@@ -103,6 +128,26 @@ export interface ReadModelTypeInfo {
 export interface ProjectionInfo {
     identifier: string;
     readModel: string;
+}
+
+const OBSERVER_TYPE_NAMES = ['Unknown', 'Reactor', 'Projection', 'Reducer', 'External'];
+const OBSERVER_OWNER_NAMES = ['None', 'Client', 'Kernel'];
+const OBSERVER_RUNNING_STATE_NAMES = ['Unknown', 'Active', 'Suspended', 'Replaying', 'Disconnected'];
+const JOB_STATUS_NAMES = [
+    'None',
+    'PreparingJob',
+    'PreparingSteps',
+    'StartingSteps',
+    'Running',
+    'CompletedSuccessfully',
+    'CompletedWithFailures',
+    'Stopped',
+    'Failed',
+    'Removing',
+];
+
+function nameFor(values: readonly string[], code: number): string {
+    return values[code] ?? `Unknown(${code})`;
 }
 
 export class ChronicleClientManager {
@@ -311,31 +356,77 @@ export class ChronicleClientManager {
         type Resp = { items?: Item[] };
         const call = s.jobs.getJobs.bind(s.jobs) as GrpcUnaryMethod<object, Resp>;
         const resp = await grpcCall(call, { EventStore: eventStore, Namespace: namespace });
-        return (resp?.items ?? []).map((j) => ({
-            id: j.Id?.value ?? '(unknown)',
-            type: j.Type ?? '',
-            status: String(j.Status ?? 0),
-        }));
+        return (resp?.items ?? []).map((j) => {
+            const statusCode = j.Status ?? 0;
+            return {
+                id: j.Id?.value ?? '(unknown)',
+                type: j.Type ?? '',
+                status: nameFor(JOB_STATUS_NAMES, statusCode),
+                statusCode,
+            };
+        });
     }
 
     async listObservers(eventStore: string, namespace: string): Promise<ObserverInfo[]> {
         const s = this._services;
         if (!s) { return []; }
-        type Item = { Id?: string; Type?: number; RunningState?: number };
+        type EventTypeItem = { Id?: string; Generation?: number; Tombstone?: boolean };
+        type Item = {
+            Id?: string;
+            EventSequenceId?: string;
+            Type?: number;
+            Owner?: number;
+            EventTypes?: EventTypeItem[];
+            NextEventSequenceNumber?: number;
+            LastHandledEventSequenceNumber?: number;
+            RunningState?: number;
+            IsSubscribed?: boolean;
+            IsReplayable?: boolean;
+        };
         type Resp = { items?: Item[] };
         const call = s.observers.getObservers.bind(s.observers) as GrpcUnaryMethod<object, Resp>;
         const resp = await grpcCall(call, { EventStore: eventStore, Namespace: namespace });
-        return (resp?.items ?? []).map((o) => ({
-            id: o.Id ?? '(unknown)',
-            type: String(o.Type ?? 0),
-            runningState: String(o.RunningState ?? 0),
-        }));
+        return (resp?.items ?? []).map((o) => {
+            const typeCode = o.Type ?? 0;
+            const ownerCode = o.Owner ?? 0;
+            const runningStateCode = o.RunningState ?? 0;
+            return {
+                id: o.Id ?? '(unknown)',
+                type: nameFor(OBSERVER_TYPE_NAMES, typeCode),
+                typeCode,
+                owner: nameFor(OBSERVER_OWNER_NAMES, ownerCode),
+                ownerCode,
+                runningState: nameFor(OBSERVER_RUNNING_STATE_NAMES, runningStateCode),
+                runningStateCode,
+                eventSequenceId: o.EventSequenceId ?? '',
+                nextEventSequenceNumber: o.NextEventSequenceNumber ?? 0,
+                lastHandledEventSequenceNumber: o.LastHandledEventSequenceNumber ?? 0,
+                isSubscribed: o.IsSubscribed ?? false,
+                isReplayable: o.IsReplayable ?? false,
+                eventTypes: (o.EventTypes ?? []).map((et) => ({
+                    id: et.Id ?? '(unknown)',
+                    generation: et.Generation ?? 1,
+                    tombstone: et.Tombstone ?? false,
+                })),
+            };
+        });
     }
 
     async listFailedPartitions(eventStore: string, namespace: string): Promise<FailedPartitionInfo[]> {
         const s = this._services;
         if (!s) { return []; }
-        type Item = { Id?: { value?: string }; ObserverId?: string; Partition?: string };
+        type AttemptItem = {
+            Occurred?: { Value?: string };
+            SequenceNumber?: number;
+            Messages?: string[];
+            StackTrace?: string;
+        };
+        type Item = {
+            Id?: { value?: string };
+            ObserverId?: string;
+            Partition?: string;
+            Attempts?: AttemptItem[];
+        };
         type Resp = { items?: Item[] };
         const call = s.failedPartitions.getFailedPartitions.bind(s.failedPartitions) as GrpcUnaryMethod<object, Resp>;
         const resp = await grpcCall(call, { EventStore: eventStore, Namespace: namespace, ObserverId: '' });
@@ -343,6 +434,12 @@ export class ChronicleClientManager {
             id: fp.Id?.value ?? '(unknown)',
             observerId: fp.ObserverId ?? '(unknown)',
             partition: fp.Partition ?? '(unknown)',
+            attempts: (fp.Attempts ?? []).map((a) => ({
+                occurred: a.Occurred?.Value,
+                sequenceNumber: a.SequenceNumber ?? 0,
+                messages: a.Messages ?? [],
+                stackTrace: a.StackTrace ?? '',
+            })),
         }));
     }
 
