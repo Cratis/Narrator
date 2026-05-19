@@ -7,6 +7,9 @@ import { ChronicleClientManager } from './ChronicleClientManager';
 import { ChronicleTreeDataProvider } from './providers/ChronicleTreeDataProvider';
 import { updateStatusBar } from './StatusBar';
 import { ExtensionState, registerContextCommands } from './ContextCommands';
+import { applyProtoPatches } from './ProtoPatches';
+
+applyProtoPatches();
 
 let _state: ExtensionState | undefined;
 
