@@ -9,8 +9,8 @@ Narrator is a VS Code extension for exploring Cratis Chronicle event stores.
 
    ```bash
    cd /home/runner/work/Narrator/Narrator/Source/VSCodeExtension
-   npm ci
-   npm run compile
+   corepack yarn install --immutable
+   corepack yarn compile
    ```
 
 3. Create or update your Chronicle CLI config at `~/.cratis/config.json`:
@@ -34,7 +34,7 @@ Narrator is a VS Code extension for exploring Cratis Chronicle event stores.
 For iterative development, run this in a separate terminal from `/home/runner/work/Narrator/Narrator/Source/VSCodeExtension`:
 
 ```bash
-npm run watch
+corepack yarn watch
 ```
 
 ## Get changes into `main`

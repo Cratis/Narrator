@@ -78,7 +78,7 @@
         }
     },
     "scripts": {
-        "vscode:prepublish": "npm run compile",
+        "vscode:prepublish": "yarn compile",
         "compile": "tsc -p ./",
         "watch": "tsc -watch -p ./",
         "lint": "eslint src --ext ts"
@@ -86,11 +86,12 @@
     "devDependencies": {
         "@types/node": "^20.0.0",
         "@types/vscode": "^1.85.0",
-        "typescript": "^5.3.0",
         "@vscode/vsce": "^2.22.0",
-        "esbuild": "^0.20.0"
+        "esbuild": "^0.20.0",
+        "typescript": "^5.3.0"
     },
     "dependencies": {
-        "@cratis/chronicle.contracts": "^15.22.13"
-    }
+        "@cratis/chronicle.contracts": "15.22.13"
+    },
+    "packageManager": "yarn@4.14.1"
 }
