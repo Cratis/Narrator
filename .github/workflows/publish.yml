@@ -91,4 +91,4 @@ jobs:
 
       - name: Publish to VSCode Marketplace
         working-directory: ./Source/VSCodeExtension
-        run: npx @vscode/vsce publish ${{ needs.release.outputs.version }} --publisher Cratis --pat ${{ secrets.VSCE_PAT }}
+        run: npx @vscode/vsce publish ${{ needs.release.outputs.version }} --pat ${{ secrets.VSCE_PAT }}
