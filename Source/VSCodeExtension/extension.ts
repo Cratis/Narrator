@@ -80,7 +80,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
 
     const connectCmd = vscode.commands.registerCommand('narrator.connect', async () => {
-        let currentConfig = loadConfiguration(getEffectiveConfigPath());
+        const currentConfig = loadConfiguration(getEffectiveConfigPath());
         let { ctxName, ctx } = resolveActiveContext(currentConfig);
 
         if (!ctx?.server) {

@@ -1,3 +1,6 @@
+// Copyright (c) Cratis. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
 import type * as ContractsModule from '@cratis/chronicle.contracts';
 import type * as vscode from 'vscode';
 import { Context } from './Configuration';
@@ -240,7 +243,7 @@ export class ChronicleClientManager {
                 } catch (error) {
                     const detail = formatError(error);
                     this._log(`[Chronicle] Initial token fetch failed: ${detail}`);
-                    throw new Error(`Token endpoint unreachable or rejected the request — ${detail}`);
+                    throw new Error(`Token endpoint unreachable or rejected the request — ${detail}`, { cause: error });
                 }
                 break;
             }

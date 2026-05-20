@@ -1,9 +1,11 @@
 .vscode/**
 .vscode-test/**
-src/**
 .gitignore
 node_modules/**
 tsconfig.json
+eslint.config.mjs
+vitest.config.ts
+esbuild.mjs
 **/*.map
 **/*.ts
 !out/**
