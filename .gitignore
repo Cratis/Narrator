@@ -317,3 +317,4 @@ Source/Core/vite.config.js
 
 .playwright-mcp
 *.lscache
+*.vsix
