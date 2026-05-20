@@ -4,6 +4,10 @@
     "description": "Browse and explore Cratis Chronicle event stores directly from VS Code",
     "version": "0.1.0",
     "publisher": "cratis",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/Cratis/Narrator.git"
+    },
     "icon": "resources/logo.png",
     "engines": {
         "vscode": "^1.85.0"
