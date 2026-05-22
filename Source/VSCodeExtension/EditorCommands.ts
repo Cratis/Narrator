@@ -3,13 +3,17 @@
 
 import * as vscode from 'vscode';
 import { ChronicleTreeItem } from './providers/ChronicleTreeDataProvider';
+import { ChronicleClientManager } from './ChronicleClientManager';
+import { openEventSequenceViewer } from './EventSequenceViewer';
 
 /**
  * Registers commands that open Chronicle artifact source — event-type and read-model JSON
  * schemas, projection DSL declarations — in throwaway editor tabs so the user can read or
  * copy the full text.
  */
-export function registerEditorCommands(): vscode.Disposable[] {
+export function registerEditorCommands(
+    getClientManager: () => ChronicleClientManager | undefined
+): vscode.Disposable[] {
     return [
         vscode.commands.registerCommand('narrator.openEventTypeSchema', (item?: ChronicleTreeItem) => {
             const data = item?.details?.data as { id?: string; schemaRaw?: string; schema?: unknown } | undefined;
@@ -42,6 +46,19 @@ export function registerEditorCommands(): vscode.Disposable[] {
                 title: `Projection Declaration: ${data.identifier ?? 'unknown'}`,
                 rawText: data.declaration,
                 language: 'plaintext',
+            });
+        }),
+        vscode.commands.registerCommand('narrator.openEventSequence', (item?: ChronicleTreeItem) => {
+            const data = item?.details?.data as { id?: string; name?: string } | undefined;
+            if (!data?.id || !item?.eventStoreName || !item?.namespaceName) {
+                vscode.window.showWarningMessage('Cannot open event sequence — missing context.');
+                return;
+            }
+            openEventSequenceViewer(getClientManager, {
+                eventStore: item.eventStoreName,
+                namespace: item.namespaceName,
+                sequenceId: data.id,
+                sequenceName: data.name ?? data.id,
             });
         }),
     ];
