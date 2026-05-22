@@ -307,11 +307,11 @@ function renderHtml(meta: { sequenceName: string; namespace: string; eventStore:
                 renderDetails();
                 scrollSelectedIntoView();
             }
-        } else if (event.key === 'PageDown') {
+        } else if (event.key === 'PageDown' || event.key === 'ArrowRight') {
             event.preventDefault();
             const nextFrom = currentFrom + pageSize;
             if (nextFrom <= tail) { loadPage(nextFrom, 'first'); }
-        } else if (event.key === 'PageUp') {
+        } else if (event.key === 'PageUp' || event.key === 'ArrowLeft') {
             event.preventDefault();
             if (currentFrom > 0) { loadPage(Math.max(0, currentFrom - pageSize), 'first'); }
         }
