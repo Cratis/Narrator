@@ -117,7 +117,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
 
     const contextDisposables = registerContextCommands(_state, statusBar, treeDataProvider, getEffectiveConfigPath);
-    const editorDisposables = registerEditorCommands();
+    const editorDisposables = registerEditorCommands(() => _state?.clientManager);
 
     if (Object.keys(config.contexts).length === 0) {
         vscode.window.showInformationMessage(

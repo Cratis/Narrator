@@ -41,6 +41,7 @@ type ItemType =
     | 'eventType'
     | 'readModelType'
     | 'projection'
+    | 'eventSequence'
     // Utility
     | 'empty'
     | 'unavailable'
@@ -117,6 +118,7 @@ export class ChronicleTreeItem extends vscode.TreeItem {
             case 'eventType':       this.iconPath = new vscode.ThemeIcon('symbol-event'); break;
             case 'readModelType':   this.iconPath = new vscode.ThemeIcon('symbol-struct'); break;
             case 'projection':      this.iconPath = new vscode.ThemeIcon('symbol-method'); break;
+            case 'eventSequence':   this.iconPath = new vscode.ThemeIcon('list-ordered'); break;
 
             case 'noConnection':
                 this.iconPath = new vscode.ThemeIcon('plug');
@@ -267,7 +269,25 @@ export class ChronicleTreeDataProvider implements vscode.TreeDataProvider<Chroni
                 );
 
             case 'sequencesFolder':
-                return [unavailableItem('Sequence browsing requires an event source ID')];
+                if (!mgr) { return []; }
+                return mgr.listEventSequences().map((sequence) => {
+                    const item = leaf(sequence.name, 'eventSequence', {
+                        eventStoreName: es,
+                        namespaceName: ns,
+                        description: sequence.description,
+                        tooltip: `ID: ${sequence.id}`,
+                        details: {
+                            title: `Event Sequence: ${sequence.name}`,
+                            data: { id: sequence.id, name: sequence.name, description: sequence.description },
+                        },
+                    });
+                    item.command = {
+                        command: 'narrator.openEventSequence',
+                        title: 'Browse Events',
+                        arguments: [item],
+                    };
+                    return item;
+                });
 
             case 'observersFolder':
                 return loadItems(

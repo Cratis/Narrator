@@ -93,6 +93,11 @@
                 "command": "narrator.openProjectionDeclaration",
                 "title": "Open Declaration",
                 "icon": "$(file-code)"
+            },
+            {
+                "command": "narrator.openEventSequence",
+                "title": "Browse Events",
+                "icon": "$(list-ordered)"
             }
         ],
         "menus": {
