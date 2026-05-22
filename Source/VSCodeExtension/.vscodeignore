@@ -1,11 +1,33 @@
+# Yarn Berry artifacts — `.yarn/cache/` holds one zip per dependency,
+# which trips the Marketplace virus scanner. None of this is needed at
+# runtime (esbuild produces a self-contained bundle in `out/`).
+.yarn/**
+.yarnrc.yml
+yarn.lock
+.pnp.*
+
+# Belt and braces with `--no-dependencies` on the publish step.
+node_modules/**
+
+# Source — only the bundled output in `out/` ships.
+**/*.ts
+
+# Build / dev tooling.
 .vscode/**
 .vscode-test/**
 .gitignore
-node_modules/**
 tsconfig.json
 eslint.config.mjs
 vitest.config.ts
 esbuild.mjs
+.eslintcache
+
+# Source maps would leak local paths and add ~1 MB for no runtime gain.
 **/*.map
-**/*.ts
-!out/**
+
+# OS metadata.
+**/.DS_Store
+
+# Packaging artifacts.
+**/*.vsix
+.vscodeignore
