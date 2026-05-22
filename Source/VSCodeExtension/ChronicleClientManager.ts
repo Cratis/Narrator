@@ -1,7 +1,23 @@
 // Copyright (c) Cratis. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-import type * as ContractsModule from '@cratis/chronicle.contracts';
+import type {
+    ConstraintsClient,
+    EventSequencesClient,
+    EventStoresClient,
+    EventTypesClient,
+    FailedPartitionsClient,
+    IdentitiesClient,
+    JobsClient,
+    NamespacesClient,
+    ObserversClient,
+    ProjectionsClient,
+    ReactorsClient,
+    ReadModelsClient,
+    RecommendationsClient,
+    ReducersClient,
+} from '@cratis/chronicle.contracts';
+import type { Channel } from 'nice-grpc';
 import type * as vscode from 'vscode';
 import { Context } from './Configuration';
 import {
@@ -25,42 +41,41 @@ function formatError(error: unknown): string {
     return String(error);
 }
 
+// ── Sentinel helpers ─────────────────────────────────────────────────────────
+
+const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+
+/**
+ * Convert a bigint sequence number to a plain number. Chronicle uses `ulong.MaxValue`
+ * (2^64-1) as the "no events yet" sentinel; anything above MAX_SAFE_INTEGER is treated
+ * as the sentinel and reported as MAX_SAFE_INTEGER. Real sequence numbers cannot
+ * legitimately exceed 2^53 (~9 quadrillion events), so clamping has no observable
+ * effect on real data.
+ */
+function bigintToNumber(value: bigint): number {
+    if (value > MAX_SAFE_BIGINT) { return Number.MAX_SAFE_INTEGER; }
+    if (value < -MAX_SAFE_BIGINT) { return Number.MIN_SAFE_INTEGER; }
+    return Number(value);
+}
+
 // ── gRPC service client bundle ───────────────────────────────────────────────
 
 interface ChronicleServices {
-    eventStores: ContractsModule.EventStoresClient;
-    namespaces: ContractsModule.NamespacesClient;
-    recommendations: ContractsModule.RecommendationsClient;
-    identities: ContractsModule.IdentitiesClient;
-    eventSequences: ContractsModule.EventSequencesClient;
-    eventTypes: ContractsModule.EventTypesClient;
-    constraints: ContractsModule.ConstraintsClient;
-    observers: ContractsModule.ObserversClient;
-    failedPartitions: ContractsModule.FailedPartitionsClient;
-    reactors: ContractsModule.ReactorsClient;
-    reducers: ContractsModule.ReducersClient;
-    projections: ContractsModule.ProjectionsClient;
-    readModels: ContractsModule.ReadModelsClient;
-    jobs: ContractsModule.JobsClient;
-}
-
-// ── gRPC call helper ─────────────────────────────────────────────────────────
-
-type GrpcUnaryMethod<TReq, TResp> = (
-    request: TReq,
-    callback: (err: Error | null, response: TResp | undefined) => void
-) => void;
-
-/** Wraps a gRPC unary call in a Promise */
-function grpcCall<TReq, TResp>(
-    method: GrpcUnaryMethod<TReq, TResp>,
-    request: TReq
-): Promise<TResp | undefined> {
-    return new Promise((resolve, reject) => {
-        method(request, (err, resp) => {
-            if (err) { reject(err); } else { resolve(resp); }
-        });
-    });
+    channel: Channel;
+    eventStores: EventStoresClient;
+    namespaces: NamespacesClient;
+    recommendations: RecommendationsClient;
+    identities: IdentitiesClient;
+    eventSequences: EventSequencesClient;
+    eventTypes: EventTypesClient;
+    constraints: ConstraintsClient;
+    observers: ObserversClient;
+    failedPartitions: FailedPartitionsClient;
+    reactors: ReactorsClient;
+    reducers: ReducersClient;
+    projections: ProjectionsClient;
+    readModels: ReadModelsClient;
+    jobs: JobsClient;
 }
 
 export interface ObserverEventTypeInfo {
@@ -146,6 +161,47 @@ export interface ProjectionInfo {
     declaration?: string;
 }
 
+export interface EventSequenceInfo {
+    /** Wire-level identifier sent to gRPC calls. */
+    id: string;
+    /** Friendly display name for the explorer. */
+    name: string;
+    /** Short description shown next to the name. */
+    description: string;
+}
+
+export interface AppendedEventInfo {
+    sequenceNumber: number;
+    eventTypeId: string;
+    eventTypeGeneration: number;
+    eventSourceType: string;
+    eventSourceId: string;
+    eventStreamType: string;
+    eventStreamId: string;
+    eventStore: string;
+    namespace: string;
+    occurred?: string;
+    correlationId?: string;
+    causedBySubject?: string;
+    causedByName?: string;
+    causedByUserName?: string;
+    observationState: number;
+    tags: string[];
+    hash: string;
+    content: unknown;
+    contentRaw: string;
+}
+
+/**
+ * Well-known event sequences shipped with Cratis Chronicle. The IDs are plain string slugs on
+ * the wire — they're not GUIDs. See https://github.com/Cratis/Chronicle for the canonical list.
+ */
+const WELL_KNOWN_EVENT_SEQUENCES: EventSequenceInfo[] = [
+    { id: 'event-log', name: 'Event Log', description: 'Default event log' },
+    { id: 'outbox',    name: 'Outbox',    description: 'Outgoing integration events' },
+    { id: 'system',    name: 'System',    description: 'Internal system events' },
+];
+
 const OBSERVER_TYPE_NAMES = ['Unknown', 'Reactor', 'Projection', 'Reducer', 'External'];
 const OBSERVER_OWNER_NAMES = ['None', 'Client', 'Kernel'];
 const OBSERVER_RUNNING_STATE_NAMES = ['Unknown', 'Active', 'Suspended', 'Replaying', 'Disconnected'];
@@ -196,9 +252,10 @@ export class ChronicleClientManager {
     }
 
     async connect(): Promise<void> {
-        const [contracts, grpc] = await Promise.all([
+        const [contracts, niceGrpc, niceGrpcCommon] = await Promise.all([
             import('@cratis/chronicle.contracts'),
-            import('@grpc/grpc-js'),
+            import('nice-grpc'),
+            import('nice-grpc-common'),
         ]);
 
         // Compose the effective connection string the same way the CLI does — embedded creds
@@ -209,9 +266,11 @@ export class ChronicleClientManager {
 
         this._log(`[Chronicle] Connecting to ${address} (TLS=${!parsed.disableTls})`);
 
+        // Use nice-grpc's bundled `@grpc/grpc-js` credentials so they match the channel type
+        // nice-grpc expects — the top-level grpc-js install ships its own duplicate types.
         const channelCredentials = parsed.disableTls
-            ? grpc.credentials.createInsecure()
-            : grpc.credentials.createSsl();
+            ? niceGrpc.ChannelCredentials.createInsecure()
+            : niceGrpc.ChannelCredentials.createSsl();
 
         let apiKey: string | undefined;
         this._tokenProvider = undefined;
@@ -255,67 +314,58 @@ export class ChronicleClientManager {
         const log = this._log.bind(this);
         const tokenProvider = this._tokenProvider;
 
-        // Auth interceptor — adds Bearer token (or API key) to every gRPC call.
-        // Using an interceptor avoids the grpc-js restriction that forbids
-        // combining insecure channel credentials with call credentials.
-        const interceptors: import('@grpc/grpc-js').Interceptor[] = [];
-        if (tokenProvider) {
-            interceptors.push((options, nextCall) => {
-                return new grpc.InterceptingCall(nextCall(options), {
-                    start(metadata, listener, next) {
-                        tokenProvider.getAccessToken()
-                            .then(token => {
-                                if (token) {
-                                    metadata.add('authorization', `Bearer ${token}`);
-                                } else {
-                                    log('[Chronicle] WARNING: token provider returned no token');
-                                }
-                                next(metadata, {
-                                    onReceiveStatus(status, nextStatus) {
-                                        if (status.code === grpc.status.UNAUTHENTICATED) {
-                                            log('[Chronicle] Server returned UNAUTHENTICATED — clearing cached token');
-                                            tokenProvider.invalidate();
-                                        }
-                                        nextStatus(status);
-                                    },
-                                });
-                            })
-                            .catch((error: unknown) => {
-                                log(`[Chronicle] ERROR fetching token: ${error instanceof Error ? error.message : String(error)}`);
-                                next(metadata, listener);
-                            });
-                    },
-                });
-            });
-        } else if (apiKey) {
-            const key = apiKey;
-            interceptors.push((options, nextCall) => {
-                return new grpc.InterceptingCall(nextCall(options), {
-                    start(metadata, listener, next) {
-                        metadata.add('authorization', `Bearer ${key}`);
-                        next(metadata, listener);
-                    },
-                });
-            });
-        }
+        // Auth middleware — attaches Bearer/API-key to every outbound call and invalidates
+        // the cached token on UNAUTHENTICATED so the next call refetches.
+        const authMiddleware: import('nice-grpc-common').ClientMiddleware = async function* (call, options) {
+            const metadata = niceGrpcCommon.Metadata(options.metadata);
+            if (tokenProvider) {
+                try {
+                    const token = await tokenProvider.getAccessToken();
+                    if (token) {
+                        metadata.set('authorization', `Bearer ${token}`);
+                    } else {
+                        log('[Chronicle] WARNING: token provider returned no token');
+                    }
+                } catch (error) {
+                    log(`[Chronicle] ERROR fetching token: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            } else if (apiKey) {
+                metadata.set('authorization', `Bearer ${apiKey}`);
+            }
+            try {
+                return yield* call.next(call.request, { ...options, metadata });
+            } catch (error) {
+                if (
+                    error instanceof niceGrpcCommon.ClientError &&
+                    error.code === niceGrpcCommon.Status.UNAUTHENTICATED &&
+                    tokenProvider
+                ) {
+                    log('[Chronicle] Server returned UNAUTHENTICATED — clearing cached token');
+                    tokenProvider.invalidate();
+                }
+                throw error;
+            }
+        };
 
-        const clientOptions = interceptors.length > 0 ? { interceptors } : undefined;
+        const channel = niceGrpc.createChannel(address, channelCredentials);
+        const factory = niceGrpc.createClientFactory().use(authMiddleware);
 
         this._services = {
-            eventStores: new contracts.EventStoresClient(address, channelCredentials, clientOptions),
-            namespaces: new contracts.NamespacesClient(address, channelCredentials, clientOptions),
-            recommendations: new contracts.RecommendationsClient(address, channelCredentials, clientOptions),
-            identities: new contracts.IdentitiesClient(address, channelCredentials, clientOptions),
-            eventSequences: new contracts.EventSequencesClient(address, channelCredentials, clientOptions),
-            eventTypes: new contracts.EventTypesClient(address, channelCredentials, clientOptions),
-            constraints: new contracts.ConstraintsClient(address, channelCredentials, clientOptions),
-            observers: new contracts.ObserversClient(address, channelCredentials, clientOptions),
-            failedPartitions: new contracts.FailedPartitionsClient(address, channelCredentials, clientOptions),
-            reactors: new contracts.ReactorsClient(address, channelCredentials, clientOptions),
-            reducers: new contracts.ReducersClient(address, channelCredentials, clientOptions),
-            projections: new contracts.ProjectionsClient(address, channelCredentials, clientOptions),
-            readModels: new contracts.ReadModelsClient(address, channelCredentials, clientOptions),
-            jobs: new contracts.JobsClient(address, channelCredentials, clientOptions),
+            channel,
+            eventStores: factory.create(contracts.EventStoresDefinition, channel),
+            namespaces: factory.create(contracts.NamespacesDefinition, channel),
+            recommendations: factory.create(contracts.RecommendationsDefinition, channel),
+            identities: factory.create(contracts.IdentitiesDefinition, channel),
+            eventSequences: factory.create(contracts.EventSequencesDefinition, channel),
+            eventTypes: factory.create(contracts.EventTypesDefinition, channel),
+            constraints: factory.create(contracts.ConstraintsDefinition, channel),
+            observers: factory.create(contracts.ObserversDefinition, channel),
+            failedPartitions: factory.create(contracts.FailedPartitionsDefinition, channel),
+            reactors: factory.create(contracts.ReactorsDefinition, channel),
+            reducers: factory.create(contracts.ReducersDefinition, channel),
+            projections: factory.create(contracts.ProjectionsDefinition, channel),
+            readModels: factory.create(contracts.ReadModelsDefinition, channel),
+            jobs: factory.create(contracts.JobsDefinition, channel),
         };
 
         this._log('[Chronicle] All gRPC service clients created. Connection ready.');
@@ -323,14 +373,7 @@ export class ChronicleClientManager {
 
     disconnect(): void {
         if (this._services) {
-            // Close all underlying gRPC channels.
-            for (const client of Object.values(this._services)) {
-                try {
-                    (client as import('@grpc/grpc-js').Client).close();
-                } catch {
-                    // Best-effort close.
-                }
-            }
+            try { this._services.channel.close(); } catch { /* best-effort */ }
         }
         this._services = undefined;
     }
@@ -342,53 +385,43 @@ export class ChronicleClientManager {
     // ── Event stores ────────────────────────────────────────────────────────
 
     async listEventStores(): Promise<string[]> {
-        const s = this._services;
-        if (!s) { return []; }
-        type Resp = { items?: string[] };
-        const call = s.eventStores.getEventStores.bind(s.eventStores) as GrpcUnaryMethod<object, Resp>;
-        const resp = await grpcCall(call, {});
-        return resp?.items ?? [];
+        const services = this._services;
+        if (!services) { return []; }
+        const response = await services.eventStores.getEventStores({});
+        return response.items ?? [];
     }
 
     // ── Namespaces ───────────────────────────────────────────────────────────
 
     async listNamespaces(eventStore: string): Promise<string[]> {
-        const s = this._services;
-        if (!s) { return []; }
-        type Resp = { items?: string[] };
-        const call = s.namespaces.getNamespaces.bind(s.namespaces) as GrpcUnaryMethod<object, Resp>;
-        const resp = await grpcCall(call, { EventStore: eventStore });
-        return resp?.items ?? [];
+        const services = this._services;
+        if (!services) { return []; }
+        const response = await services.namespaces.getNamespaces({ EventStore: eventStore });
+        return response.items ?? [];
     }
 
     // ── Namespace-scoped ─────────────────────────────────────────────────────
 
     async listRecommendations(eventStore: string, namespace: string): Promise<RecommendationInfo[]> {
-        const s = this._services;
-        if (!s) { return []; }
-        type Item = { Id?: { value?: string }; Name?: string; Type?: string };
-        type Resp = { items?: Item[] };
-        const call = s.recommendations.getRecommendations.bind(s.recommendations) as GrpcUnaryMethod<object, Resp>;
-        const resp = await grpcCall(call, { EventStore: eventStore, Namespace: namespace });
-        return (resp?.items ?? []).map((r) => ({
-            id: r.Id?.value ?? '(unknown)',
-            name: r.Name ?? '(unknown)',
-            type: r.Type ?? '',
+        const services = this._services;
+        if (!services) { return []; }
+        const response = await services.recommendations.getRecommendations({ EventStore: eventStore, Namespace: namespace });
+        return (response.items ?? []).map((recommendation) => ({
+            id: '(unknown)',
+            name: recommendation.Name ?? '(unknown)',
+            type: recommendation.Type ?? '',
         }));
     }
 
     async listJobs(eventStore: string, namespace: string): Promise<JobInfo[]> {
-        const s = this._services;
-        if (!s) { return []; }
-        type Item = { Id?: { value?: string }; Type?: string; Status?: number };
-        type Resp = { items?: Item[] };
-        const call = s.jobs.getJobs.bind(s.jobs) as GrpcUnaryMethod<object, Resp>;
-        const resp = await grpcCall(call, { EventStore: eventStore, Namespace: namespace });
-        return (resp?.items ?? []).map((j) => {
-            const statusCode = j.Status ?? 0;
+        const services = this._services;
+        if (!services) { return []; }
+        const response = await services.jobs.getJobs({ EventStore: eventStore, Namespace: namespace });
+        return (response.items ?? []).map((job) => {
+            const statusCode = job.Status ?? 0;
             return {
-                id: j.Id?.value ?? '(unknown)',
-                type: j.Type ?? '',
+                id: '(unknown)',
+                type: job.Type ?? '',
                 status: nameFor(JOB_STATUS_NAMES, statusCode),
                 statusCode,
             };
@@ -396,183 +429,204 @@ export class ChronicleClientManager {
     }
 
     async listObservers(eventStore: string, namespace: string): Promise<ObserverInfo[]> {
-        const s = this._services;
-        if (!s) { return []; }
-        type EventTypeItem = { Id?: string; Generation?: number; Tombstone?: boolean };
-        type Item = {
-            Id?: string;
-            EventSequenceId?: string;
-            Type?: number;
-            Owner?: number;
-            EventTypes?: EventTypeItem[];
-            NextEventSequenceNumber?: number;
-            LastHandledEventSequenceNumber?: number;
-            RunningState?: number;
-            IsSubscribed?: boolean;
-            IsReplayable?: boolean;
-        };
-        type Resp = { items?: Item[] };
-        const call = s.observers.getObservers.bind(s.observers) as GrpcUnaryMethod<object, Resp>;
-        const resp = await grpcCall(call, { EventStore: eventStore, Namespace: namespace });
-        return (resp?.items ?? []).map((o) => {
-            const typeCode = o.Type ?? 0;
-            const ownerCode = o.Owner ?? 0;
-            const runningStateCode = o.RunningState ?? 0;
+        const services = this._services;
+        if (!services) { return []; }
+        const response = await services.observers.getObservers({ EventStore: eventStore, Namespace: namespace });
+        return (response.items ?? []).map((observer) => {
+            const typeCode = observer.Type ?? 0;
+            const ownerCode = observer.Owner ?? 0;
+            const runningStateCode = observer.RunningState ?? 0;
             return {
-                id: o.Id ?? '(unknown)',
+                id: observer.Id ?? '(unknown)',
                 type: nameFor(OBSERVER_TYPE_NAMES, typeCode),
                 typeCode,
                 owner: nameFor(OBSERVER_OWNER_NAMES, ownerCode),
                 ownerCode,
                 runningState: nameFor(OBSERVER_RUNNING_STATE_NAMES, runningStateCode),
                 runningStateCode,
-                eventSequenceId: o.EventSequenceId ?? '',
-                nextEventSequenceNumber: o.NextEventSequenceNumber ?? 0,
-                lastHandledEventSequenceNumber: o.LastHandledEventSequenceNumber ?? 0,
-                isSubscribed: o.IsSubscribed ?? false,
-                isReplayable: o.IsReplayable ?? false,
-                eventTypes: (o.EventTypes ?? []).map((et) => ({
-                    id: et.Id ?? '(unknown)',
-                    generation: et.Generation ?? 1,
-                    tombstone: et.Tombstone ?? false,
+                eventSequenceId: observer.EventSequenceId ?? '',
+                nextEventSequenceNumber: bigintToNumber(observer.NextEventSequenceNumber ?? 0n),
+                lastHandledEventSequenceNumber: bigintToNumber(observer.LastHandledEventSequenceNumber ?? 0n),
+                isSubscribed: observer.IsSubscribed ?? false,
+                isReplayable: observer.IsReplayable ?? false,
+                eventTypes: (observer.EventTypes ?? []).map((eventType) => ({
+                    id: eventType.Id ?? '(unknown)',
+                    generation: eventType.Generation ?? 1,
+                    tombstone: eventType.Tombstone ?? false,
                 })),
             };
         });
     }
 
     async listFailedPartitions(eventStore: string, namespace: string): Promise<FailedPartitionInfo[]> {
-        const s = this._services;
-        if (!s) { return []; }
-        type AttemptItem = {
-            Occurred?: { Value?: string };
-            SequenceNumber?: number;
-            Messages?: string[];
-            StackTrace?: string;
-        };
-        type Item = {
-            Id?: { value?: string };
-            ObserverId?: string;
-            Partition?: string;
-            Attempts?: AttemptItem[];
-        };
-        type Resp = { items?: Item[] };
-        const call = s.failedPartitions.getFailedPartitions.bind(s.failedPartitions) as GrpcUnaryMethod<object, Resp>;
-        const resp = await grpcCall(call, { EventStore: eventStore, Namespace: namespace, ObserverId: '' });
-        return (resp?.items ?? []).map((fp) => ({
-            id: fp.Id?.value ?? '(unknown)',
-            observerId: fp.ObserverId ?? '(unknown)',
-            partition: fp.Partition ?? '(unknown)',
-            attempts: (fp.Attempts ?? []).map((a) => ({
-                occurred: a.Occurred?.Value,
-                sequenceNumber: a.SequenceNumber ?? 0,
-                messages: a.Messages ?? [],
-                stackTrace: a.StackTrace ?? '',
+        const services = this._services;
+        if (!services) { return []; }
+        const response = await services.failedPartitions.getFailedPartitions({
+            EventStore: eventStore,
+            Namespace: namespace,
+            ObserverId: '',
+        });
+        return (response.items ?? []).map((failedPartition) => ({
+            id: '(unknown)',
+            observerId: failedPartition.ObserverId ?? '(unknown)',
+            partition: failedPartition.Partition ?? '(unknown)',
+            attempts: (failedPartition.Attempts ?? []).map((attempt) => ({
+                occurred: attempt.Occurred?.Value,
+                sequenceNumber: bigintToNumber(attempt.SequenceNumber ?? 0n),
+                messages: attempt.Messages ?? [],
+                stackTrace: attempt.StackTrace ?? '',
             })),
         }));
     }
 
     async listIdentities(eventStore: string, namespace: string): Promise<IdentityInfo[]> {
-        const s = this._services;
-        if (!s) { return []; }
-        type Item = { Subject?: string; Name?: string; UserName?: string };
-        type Resp = { items?: Item[] };
-        const call = s.identities.getIdentities.bind(s.identities) as GrpcUnaryMethod<object, Resp>;
-        const resp = await grpcCall(call, { EventStore: eventStore, Namespace: namespace });
-        return (resp?.items ?? []).map((i) => ({
-            subject: i.Subject ?? '(unknown)',
-            name: i.Name ?? '(unknown)',
-            userName: i.UserName ?? '',
+        const services = this._services;
+        if (!services) { return []; }
+        const response = await services.identities.getIdentities({ EventStore: eventStore, Namespace: namespace });
+        return (response.items ?? []).map((identity) => ({
+            subject: identity.Subject ?? '(unknown)',
+            name: identity.Name ?? '(unknown)',
+            userName: identity.UserName ?? '',
         }));
     }
 
     // ── Event-store level (General) ──────────────────────────────────────────
 
     async listEventTypes(eventStore: string): Promise<EventTypeInfo[]> {
-        const s = this._services;
-        if (!s) { return []; }
-        type Item = {
-            Type?: { Id?: string; Generation?: number; Tombstone?: boolean };
-            Schema?: string;
-        };
-        type Resp = { items?: Item[] };
-        const call = s.eventTypes.getAllRegistrations.bind(s.eventTypes) as GrpcUnaryMethod<object, Resp>;
-        const resp = await grpcCall(call, { EventStore: eventStore });
-        return (resp?.items ?? []).map((et) => ({
-            id: et.Type?.Id ?? '(unknown)',
-            generation: et.Type?.Generation ?? 1,
-            tombstone: et.Type?.Tombstone ?? false,
-            schema: tryParseJson(et.Schema),
-            schemaRaw: et.Schema,
+        const services = this._services;
+        if (!services) { return []; }
+        const response = await services.eventTypes.getAllRegistrations({ EventStore: eventStore });
+        return (response.items ?? []).map((registration) => ({
+            id: registration.Type?.Id ?? '(unknown)',
+            generation: registration.Type?.Generation ?? 1,
+            tombstone: registration.Type?.Tombstone ?? false,
+            schema: tryParseJson(registration.Schema),
+            schemaRaw: registration.Schema,
         }));
     }
 
     async listReadModelTypes(eventStore: string): Promise<ReadModelTypeInfo[]> {
-        const s = this._services;
-        if (!s) { return []; }
-        type Item = {
-            Type?: { Identifier?: string; Generation?: number };
-            ContainerName?: string;
-            DisplayName?: string;
-            Schema?: string;
-            Indexes?: { PropertyPath?: string }[];
-            ObserverType?: number;
-            ObserverIdentifier?: string;
-            Owner?: number;
-            Source?: number;
-        };
-        type Resp = { ReadModels?: Item[] };
-        const call = s.readModels.getDefinitions.bind(s.readModels) as GrpcUnaryMethod<object, Resp>;
-        const resp = await grpcCall(call, { EventStore: eventStore });
-        return (resp?.ReadModels ?? []).map((rm) => {
-            const identifier = rm.Type?.Identifier ?? '(unknown)';
+        const services = this._services;
+        if (!services) { return []; }
+        const response = await services.readModels.getDefinitions({ EventStore: eventStore });
+        return (response.ReadModels ?? []).map((readModel) => {
+            const identifier = readModel.Type?.Identifier ?? '(unknown)';
             return {
                 identifier,
-                displayName: rm.DisplayName ?? identifier,
-                containerName: rm.ContainerName,
-                schema: tryParseJson(rm.Schema),
-                schemaRaw: rm.Schema,
-                indexes: (rm.Indexes ?? []).map((idx) => idx.PropertyPath ?? '').filter((p) => p !== ''),
-                owner: nameFor(READ_MODEL_OWNER_NAMES, rm.Owner ?? 0),
-                source: nameFor(READ_MODEL_SOURCE_NAMES, rm.Source ?? 0),
-                observerType: nameFor(READ_MODEL_OBSERVER_TYPE_NAMES, rm.ObserverType ?? 0),
-                observerIdentifier: rm.ObserverIdentifier,
+                displayName: readModel.DisplayName ?? identifier,
+                containerName: readModel.ContainerName,
+                schema: tryParseJson(readModel.Schema),
+                schemaRaw: readModel.Schema,
+                indexes: (readModel.Indexes ?? []).map((index) => index.PropertyPath ?? '').filter((path) => path !== ''),
+                owner: nameFor(READ_MODEL_OWNER_NAMES, readModel.Owner ?? 0),
+                source: nameFor(READ_MODEL_SOURCE_NAMES, readModel.Source ?? 0),
+                observerType: nameFor(READ_MODEL_OBSERVER_TYPE_NAMES, readModel.ObserverType ?? 0),
+                observerIdentifier: readModel.ObserverIdentifier,
             };
         });
     }
 
     async listProjections(eventStore: string): Promise<ProjectionInfo[]> {
-        const s = this._services;
-        if (!s) { return []; }
-        type DefinitionItem = { Identifier?: string; ReadModel?: string };
-        type DefinitionResp = { items?: DefinitionItem[] };
-        type DeclarationItem = { Identifier?: string; ContainerName?: string; Declaration?: string };
-        type DeclarationResp = { items?: DeclarationItem[] };
-
-        const definitionsCall = s.projections.getAllDefinitions.bind(s.projections) as GrpcUnaryMethod<object, DefinitionResp>;
-        const declarationsCall = s.projections.getAllDeclarations.bind(s.projections) as GrpcUnaryMethod<object, DeclarationResp>;
-
+        const services = this._services;
+        if (!services) { return []; }
         // Definitions carry the ReadModel association; declarations carry the DSL text. Fetch both
         // in parallel and merge by Identifier so each projection has the structured and source view.
         const [definitions, declarations] = await Promise.all([
-            grpcCall(definitionsCall, { EventStore: eventStore }),
-            grpcCall(declarationsCall, { EventStore: eventStore }),
+            services.projections.getAllDefinitions({ EventStore: eventStore }),
+            services.projections.getAllDeclarations({ EventStore: eventStore }),
         ]);
 
-        const declarationsByIdentifier = new Map<string, DeclarationItem>();
-        for (const decl of declarations?.items ?? []) {
-            if (decl.Identifier) {
-                declarationsByIdentifier.set(decl.Identifier, decl);
+        const declarationsByIdentifier = new Map<string, { ContainerName: string; Declaration: string }>();
+        for (const declaration of declarations.items ?? []) {
+            if (declaration.Identifier) {
+                declarationsByIdentifier.set(declaration.Identifier, {
+                    ContainerName: declaration.ContainerName,
+                    Declaration: declaration.Declaration,
+                });
             }
         }
 
-        return (definitions?.items ?? []).map((definition) => {
+        return (definitions.items ?? []).map((definition) => {
             const identifier = definition.Identifier ?? '(unknown)';
-            const decl = declarationsByIdentifier.get(identifier);
+            const declaration = declarationsByIdentifier.get(identifier);
             return {
                 identifier,
                 readModel: definition.ReadModel ?? '',
-                containerName: decl?.ContainerName,
-                declaration: decl?.Declaration,
+                containerName: declaration?.ContainerName,
+                declaration: declaration?.Declaration,
+            };
+        });
+    }
+
+    // ── Event sequences ──────────────────────────────────────────────────────
+
+    /**
+     * Returns the well-known event sequences for a namespace. The gRPC contract has no listing
+     * RPC, so we surface the constant set Chronicle ships with — additional custom sequences are
+     * still reachable by their ID through any other API that takes an `EventSequenceId`.
+     */
+    listEventSequences(): EventSequenceInfo[] {
+        return WELL_KNOWN_EVENT_SEQUENCES.map((sequence) => ({ ...sequence }));
+    }
+
+    async getEventSequenceTail(eventStore: string, namespace: string, eventSequenceId: string): Promise<number> {
+        const services = this._services;
+        if (!services) { return 0; }
+        const response = await services.eventSequences.getTailSequenceNumber({
+            EventStore: eventStore,
+            Namespace: namespace,
+            EventSequenceId: eventSequenceId,
+            EventTypes: [],
+            EventSourceId: '',
+            EventSourceType: '',
+            EventStreamId: '',
+            EventStreamType: '',
+        });
+        return bigintToNumber(response.SequenceNumber ?? 0n);
+    }
+
+    async getEventsFromSequence(
+        eventStore: string,
+        namespace: string,
+        eventSequenceId: string,
+        fromSequenceNumber: number,
+        toSequenceNumber: number
+    ): Promise<AppendedEventInfo[]> {
+        const services = this._services;
+        if (!services) { return []; }
+        const response = await services.eventSequences.getEventsFromEventSequenceNumber({
+            EventStore: eventStore,
+            Namespace: namespace,
+            EventSequenceId: eventSequenceId,
+            FromEventSequenceNumber: BigInt(fromSequenceNumber),
+            ToEventSequenceNumber: BigInt(toSequenceNumber),
+            EventSourceId: '',
+            EventTypes: [],
+        });
+        return (response.Events ?? []).map((event) => {
+            const context = event.Context;
+            const causedBy = context?.CausedBy;
+            const contentRaw = event.Content ?? '';
+            return {
+                sequenceNumber: bigintToNumber(context?.SequenceNumber ?? 0n),
+                eventTypeId: context?.EventType?.Id ?? '(unknown)',
+                eventTypeGeneration: context?.EventType?.Generation ?? 1,
+                eventSourceType: context?.EventSourceType ?? '',
+                eventSourceId: context?.EventSourceId ?? '',
+                eventStreamType: context?.EventStreamType ?? '',
+                eventStreamId: context?.EventStreamId ?? '',
+                eventStore: context?.EventStore ?? '',
+                namespace: context?.Namespace ?? '',
+                occurred: context?.Occurred?.Value,
+                correlationId: undefined,
+                causedBySubject: causedBy?.Subject,
+                causedByName: causedBy?.Name,
+                causedByUserName: causedBy?.UserName,
+                observationState: context?.ObservationState ?? 0,
+                tags: context?.Tags ?? [],
+                hash: context?.Hash ?? '',
+                content: tryParseJson(contentRaw),
+                contentRaw,
             };
         });
     }

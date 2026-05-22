@@ -9,9 +9,6 @@ import { DetailsTreeDataProvider } from './providers/DetailsTreeDataProvider';
 import { updateStatusBar } from './StatusBar';
 import { ExtensionState, registerContextCommands } from './ContextCommands';
 import { registerEditorCommands } from './EditorCommands';
-import { applyProtoPatches } from './ProtoPatches';
-
-applyProtoPatches();
 
 let _state: ExtensionState | undefined;
 
