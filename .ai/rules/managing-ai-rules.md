@@ -28,8 +28,7 @@ paths:
 
 .github/                         ← GitHub Copilot adapters (do NOT edit)
 ├── copilot-instructions.md      ← path-reference → ../.ai/rules/general.md
-├── instructions/
-│   └── <name>.instructions.md   ← per-file adapter → ../../.ai/rules/<name>.md   (Copilot needs the .instructions.md suffix)
+├── instructions/               ← folder symlink → ../.ai/rules   (rules maintained in one place; see Copilot suffix caveat below)
 ├── agents/
 │   └── <name>.agent.md          ← per-file symlink → ../../.ai/agents/<name>.md   (Copilot needs the .agent.md suffix)
 ├── prompts/                     ← folder symlink → ../.ai/prompts                (Copilot reads *.prompt.md)
@@ -56,13 +55,15 @@ AGENTS.md                        ← Codex root instructions → .ai/rules/gener
 | Surface | Copilot | Claude Code | Codex |
 |---|---|---|---|
 | Root instructions | `copilot-instructions.md` → `general.md` | `CLAUDE.md` → `general.md` | `AGENTS.md` → `general.md` |
-| Scoped rules | `instructions/<n>.instructions.md` (per-file) | `rules/<n>.md` (per-file) | — |
+| Scoped rules | `instructions/` (folder symlink → `.ai/rules`) | `rules/<n>.md` (per-file) | — |
 | Agents | `agents/<n>.agent.md` (per-file, `.agent.md` suffix) | `agents/` (folder symlink, `<n>.md`) | — |
 | Prompts / commands | `prompts/` (folder symlink, `*.prompt.md`) | `commands/<n>.md` (per-file) | — |
 | Skills | `skills/` (folder symlink) | `skills/` (folder symlink) | `.agents/skills/` (folder symlink) |
 | Hooks | `.github/hooks/*.json` | `.claude/settings.json` | — |
 
-Folder symlinks (skills both sides, Copilot prompts, Claude agents) pick up additions/renames automatically. The per-file adapters (rules, Copilot agents, Claude commands) are needed because the tool requires a different filename suffix/location than the canonical source — so a new rule/agent/prompt needs its matching per-file adapter created (see below). The validator (`hooks/scripts/validate-ai-setup.sh`) checks each adapter resolves to the right canonical file (symlink or path-reference file are both accepted).
+Folder symlinks (skills both sides, Copilot prompts and instructions, Claude agents) pick up additions/renames automatically. The remaining per-file adapters (Claude rules, Copilot agents, Claude commands) are needed because the tool requires a different filename suffix/location than the canonical source — so a new agent/prompt needs its matching per-file adapter created (see below). The validator (`hooks/scripts/validate-ai-setup.sh`) checks each adapter resolves to the right canonical file (symlink or path-reference file are both accepted).
+
+**Copilot suffix caveat for `.github/instructions`.** `.github/instructions` is a folder symlink into `.ai/rules` so rules are maintained in exactly one place. The trade-off: GitHub Copilot's `applyTo` discovery expects scoped instruction files to carry the `.instructions.md` suffix, and through a folder symlink the rules are exposed as `<name>.md`. Claude Code (`.claude/rules`) and Codex still consume the rules, and the content is fully available, but Copilot will not auto-attach scoped rules by glob through the folder symlink.
 
 > **Hooks are not folder adapters.** Markdown is not a hook format for either tool — `.ai/hooks/*.md` are *lifecycle guidance*. Enforce them per tool: Claude via `.claude/settings.json` (`Stop`, `PreToolUse`, …); Copilot via `.github/hooks/*.json` (`sessionStart`/`sessionEnd`/`userPromptSubmitted`).
 
@@ -97,13 +98,7 @@ A profile-specific rule declares **`profile: application`** or **`profile: frame
 
 1. **Create the canonical file** in `.ai/rules/<name>.md` with the appropriate frontmatter and content.
 
-2. **Create the Copilot adapter** in `.github/instructions/` — a path-reference file whose body is the relative target:
-
-   ```bash
-   printf '%s' "../../.ai/rules/<name>.md" > .github/instructions/<name>.instructions.md
-   ```
-
-   (A symlink — `ln -s ../../.ai/rules/<name>.md <name>.instructions.md` — also resolves; the repo standardizes on path-reference files.)
+2. **Copilot needs no per-rule step** — `.github/instructions` is a folder symlink into `.ai/rules`, so the new rule appears automatically (subject to the Copilot suffix caveat above).
 
 3. **Create the Claude symlink** in `.claude/rules/`:
 
@@ -142,13 +137,9 @@ Run `hooks/scripts/validate-ai-setup.sh` after adding an agent or prompt to conf
 ## Renaming a rule
 
 1. Rename the file in `.ai/rules/`.
-2. Remove the old symlinks and recreate them pointing to the new filename:
+2. Copilot's `.github/instructions` folder symlink picks up the rename automatically. Update only the Claude per-file symlink:
 
    ```bash
-   # In .github/instructions/ (path-reference file)
-   rm <old-name>.instructions.md
-   printf '%s' "../../.ai/rules/<new-name>.md" > <new-name>.instructions.md
-
    # In .claude/rules/ (symlink)
    rm <old-name>.md
    ln -s ../../.ai/rules/<new-name>.md <new-name>.md
@@ -162,7 +153,7 @@ An adapter's target (the symlink target, or the path-reference file's body) uses
 
 | Adapter location | Target |
 |---|---|
-| `.github/instructions/<name>.instructions.md` | `../../.ai/rules/<name>.md` |
+| `.github/instructions` (folder symlink) | `../.ai/rules` |
 | `.claude/rules/<name>.md` | `../../.ai/rules/<name>.md` |
 | `.github/agents/<name>.agent.md` | `../../.ai/agents/<name>.md` |
 | `.claude/commands/<name>.md` | `../../.ai/prompts/<name>.prompt.md` |
@@ -173,9 +164,7 @@ An adapter's target (the symlink target, or the path-reference file's body) uses
 
 ## Propagation and adapters
 
-The cross-repository propagation workflow reads `.github/instructions/` and `.github/copilot-instructions.md` via the GitHub API. A symlink's blob (Git mode `120000`) and a path-reference file's body both contain the raw relative target path, so a naïve copy would push that path string rather than the real rule content to target repositories. The propagation script resolves Git symlinks (mode `120000`) to the target file's content before propagating.
-
-**Note:** the `.github/instructions/` adapters in this repo are path-reference files (mode `100644`), not symlinks. Ensuring the propagation script resolves *that* form to real content too — not just symlinks — is part of the separately-managed propagation mechanism; confirm it before relying on org-wide propagation. (The corpus content itself is independent of how propagation is wired.)
+The cross-repository propagation workflow is a broadcast sync: any Cratis repository can be the source, and changes propagate to the other repositories, including `Cratis/AI` when the source is not `Cratis/AI`. Propagation normalizes known adapter paths before broadcasting them. When the matching canonical `.ai` file exists in the source tree, an adapter path is written as the expected symlink or path-reference file, even if the source repository currently contains copied content at that adapter path. Do not materialize adapter targets into copied `.ai` content in tool-specific files; that breaks the `.ai/` source-of-truth model and causes drift between adapters and canonical corpus files.
 
 ## Shared workflows
 
