@@ -20,8 +20,7 @@ Narrator is a VS Code extension for exploring Cratis Chronicle event stores.
      "activeContext": "default",
      "contexts": {
        "default": {
-         "server": "chronicle://localhost:35000",
-         "managementPort": 8080
+         "server": "chronicle://localhost:35000"
        }
      }
    }
