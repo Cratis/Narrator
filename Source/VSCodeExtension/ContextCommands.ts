@@ -27,7 +27,7 @@ export function registerContextCommands(
 ): vscode.Disposable[] {
     async function runAddContextFlow(prefillName?: string): Promise<void> {
         const name = await vscode.window.showInputBox({
-            title: 'Add Chronicle Context (1/3)',
+            title: 'Add Chronicle Context (1/2)',
             prompt: 'Context name',
             value: prefillName ?? '',
             placeHolder: 'default',
@@ -36,26 +36,16 @@ export function registerContextCommands(
         if (!name) { return; }
 
         const server = await vscode.window.showInputBox({
-            title: 'Add Chronicle Context (2/3)',
+            title: 'Add Chronicle Context (2/2)',
             prompt: 'Chronicle server URL',
             placeHolder: 'chronicle://localhost:35000',
             validateInput: v => (!v?.trim() ? 'Server URL is required' : undefined),
         });
         if (!server) { return; }
 
-        const portStr = await vscode.window.showInputBox({
-            title: 'Add Chronicle Context (3/3)',
-            prompt: 'Management port (leave empty for default 8080)',
-            placeHolder: '8080',
-        });
-        if (portStr === undefined) { return; }
-
         const freshConfig = loadConfiguration(getEffectiveConfigPath());
         freshConfig.contexts[name.trim()] = {
             server: server.trim(),
-            ...(portStr.trim() && !isNaN(parseInt(portStr.trim(), 10))
-                ? { managementPort: parseInt(portStr.trim(), 10) }
-                : {}),
         };
         if (!freshConfig.activeContext) {
             freshConfig.activeContext = name.trim();
@@ -134,27 +124,14 @@ export function registerContextCommands(
         if (!ctx) { return; }
 
         const server = await vscode.window.showInputBox({
-            title: `Edit Context: ${contextName} (1/2)`,
+            title: `Edit Context: ${contextName}`,
             prompt: 'Chronicle server URL',
             value: ctx.server ?? '',
             validateInput: v => (!v?.trim() ? 'Server URL is required' : undefined),
         });
         if (server === undefined) { return; }
 
-        const portStr = await vscode.window.showInputBox({
-            title: `Edit Context: ${contextName} (2/2)`,
-            prompt: 'Management port (leave empty for default 8080)',
-            value: ctx.managementPort !== undefined ? String(ctx.managementPort) : '',
-            placeHolder: '8080',
-        });
-        if (portStr === undefined) { return; }
-
         ctx.server = server.trim();
-        if (portStr.trim() && !isNaN(parseInt(portStr.trim(), 10))) {
-            ctx.managementPort = parseInt(portStr.trim(), 10);
-        } else {
-            delete ctx.managementPort;
-        }
         saveConfiguration(freshConfig, getEffectiveConfigPath());
 
         if (contextName === state.activeContextName) {

@@ -15,7 +15,6 @@ import { Context } from './Configuration';
 
 const DEVELOPMENT_CLIENT_ID = 'chronicle-dev-client';
 const DEVELOPMENT_CLIENT_SECRET = 'chronicle-dev-secret';
-const DEFAULT_MANAGEMENT_PORT = 8080;
 const DEFAULT_CHRONICLE_PORT = 35000;
 const TOKEN_LIFETIME_MINUTES = 55;
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
@@ -50,7 +49,7 @@ export interface CachedToken {
 export function composeEffectiveConnectionString(context: Context): string {
     const server = context.server && context.server.trim() !== ''
         ? context.server
-        : 'chronicle://localhost:35000/?disableTls=true';
+        : 'chronicle://localhost:35000';
 
     if (hasEmbeddedAuth(server)) {
         return server;
@@ -65,10 +64,6 @@ export function composeEffectiveConnectionString(context: Context): string {
     }
 
     return insertCredentials(server, DEVELOPMENT_CLIENT_ID, DEVELOPMENT_CLIENT_SECRET);
-}
-
-export function resolveManagementPort(context: Context): number {
-    return context.managementPort ?? DEFAULT_MANAGEMENT_PORT;
 }
 
 /** Parses a Chronicle connection string into host/port/auth components. */
@@ -138,7 +133,7 @@ export function deleteCachedToken(cachePath: string): void {
 
 export interface TokenRequest {
     host: string;
-    managementPort: number;
+    port: number;
     disableTls: boolean;
     clientId: string;
     clientSecret: string;
@@ -149,10 +144,10 @@ export interface TokenResponse {
     expiresIn: number;
 }
 
-/** Performs an OAuth client_credentials request against the Chronicle management endpoint. */
+/** Performs an OAuth client_credentials request against the Chronicle server's `/connect/token` endpoint. */
 export async function fetchAccessToken(request: TokenRequest): Promise<TokenResponse> {
     const scheme = request.disableTls ? 'http' : 'https';
-    const endpoint = `${scheme}://${request.host}:${request.managementPort}/connect/token`;
+    const endpoint = `${scheme}://${request.host}:${request.port}/connect/token`;
 
     const params = new URLSearchParams({
         grant_type: 'client_credentials',
@@ -195,7 +190,7 @@ export class CachingTokenProvider {
 
         this._inflight = (async () => {
             try {
-                this._log(`[Chronicle] Requesting OAuth token from ${this._request.host}:${this._request.managementPort} (client_id=${this._request.clientId})`);
+                this._log(`[Chronicle] Requesting OAuth token from ${this._request.host}:${this._request.port} (client_id=${this._request.clientId})`);
                 const response = await fetchAccessToken(this._request);
                 const expiry = new Date(Date.now() + TOKEN_LIFETIME_MINUTES * 60_000);
                 writeCachedToken(this._cachePath, { accessToken: response.accessToken, expiry });

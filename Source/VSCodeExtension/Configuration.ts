@@ -11,7 +11,6 @@ export interface Context {
     namespace?: string;
     clientId?: string;
     clientSecret?: string;
-    managementPort?: number;
     accessToken?: string;
     tokenExpiry?: string;
     loggedInUser?: string;
