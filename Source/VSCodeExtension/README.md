@@ -19,8 +19,7 @@ The extension reads connection settings from the same CLI config file used by th
   "activeContext": "default",
   "contexts": {
     "default": {
-      "server": "chronicle://localhost:35000",
-      "managementPort": 8080
+      "server": "chronicle://localhost:35000"
     }
   }
 }

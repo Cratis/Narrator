@@ -429,7 +429,6 @@ export class ChronicleTreeDataProvider implements vscode.TreeDataProvider<Chroni
                             eventStore: ctx.eventStore,
                             namespace: ctx.namespace,
                             clientId: ctx.clientId,
-                            managementPort: ctx.managementPort,
                             loggedInUser: ctx.loggedInUser,
                         },
                     },
