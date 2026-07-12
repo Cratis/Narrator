@@ -26,7 +26,6 @@ import {
     composeEffectiveConnectionString,
     getTokenCachePath,
     parseConnection,
-    resolveManagementPort,
 } from './Auth';
 
 function formatError(error: unknown): string {
@@ -268,9 +267,13 @@ export class ChronicleClientManager {
 
         // Use nice-grpc's bundled `@grpc/grpc-js` credentials so they match the channel type
         // nice-grpc expects — the top-level grpc-js install ships its own duplicate types.
+        // The Kernel's single port is TLS-only and, in development, serves a self-signed
+        // certificate. `@grpc/grpc-js` has no per-error hook to bypass just the untrusted-root
+        // case, so — mirroring the TypeScript Chronicle client — skip chain validation entirely
+        // whenever TLS is enabled, since this client never pins an expected server certificate.
         const channelCredentials = parsed.disableTls
             ? niceGrpc.ChannelCredentials.createInsecure()
-            : niceGrpc.ChannelCredentials.createSsl();
+            : niceGrpc.ChannelCredentials.createSsl(null, null, null, { rejectUnauthorized: false });
 
         let apiKey: string | undefined;
         this._tokenProvider = undefined;
@@ -281,14 +284,13 @@ export class ChronicleClientManager {
                 apiKey = parsed.apiKey;
                 break;
             case AuthMode.ClientCredentials: {
-                const managementPort = resolveManagementPort(this._context);
-                this._log(`[Chronicle] Auth mode: client_credentials (clientId=${parsed.username}, managementPort=${managementPort})`);
+                this._log(`[Chronicle] Auth mode: client_credentials (clientId=${parsed.username})`);
                 const cachePath = getTokenCachePath(this._contextName, parsed.username ?? '');
                 this._tokenProvider = new CachingTokenProvider(
                     cachePath,
                     {
                         host: parsed.host,
-                        managementPort,
+                        port: parsed.port,
                         disableTls: parsed.disableTls,
                         clientId: parsed.username ?? '',
                         clientSecret: parsed.password ?? '',
