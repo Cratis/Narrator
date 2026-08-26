@@ -318,3 +318,6 @@ Source/Core/vite.config.js
 .playwright-mcp
 *.lscache
 *.vsix
+
+# Local AI work artifacts (plans, handovers, session notes) — never tracked
+.ai-work/
