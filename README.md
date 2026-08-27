@@ -13,10 +13,11 @@
 
 ---
 
-Every story needs someone to tell it. **Chronicle** records what happened as an immutable log of events — the
-raw facts, in order, forever. Narrator is the voice that reads that log back: it connects to a running
-Chronicle instance and walks you through its event stores, namespaces, and observers in a dedicated VS Code
-panel, so you can open any event type's schema or follow it straight to where it's declared. The events are the
+Every story needs someone to tell it. **[Chronicle](https://github.com/Cratis/Chronicle)**, the open-source
+(MIT) event-sourcing database, records what happened as an immutable log of events — the raw facts, in order,
+forever. Narrator is the voice that reads that event store back: it connects to a running Chronicle instance
+and walks you through its event stores, namespaces, and observers in a dedicated VS Code panel, so you can
+open any event type's schema or follow it straight to where it's declared. The events are the
 story; Narrator recounts them, without ever leaving your editor.
 
 ## 🎙️ Why "Narrator"?
@@ -114,7 +115,24 @@ yarn compile     # the extension bundles clean
 ## 🗺️ Start here
 
 - [`Source/VSCodeExtension/README.md`](Source/VSCodeExtension/README.md) — the extension's own reference.
-- [Cratis Chronicle](https://github.com/Cratis/Chronicle) — the event-sourcing engine whose stores Narrator reads.
+- [Cratis Chronicle](https://github.com/Cratis/Chronicle) — the event-sourcing database whose stores Narrator reads.
+- [Chronicle documentation](https://www.cratis.io/chronicle/) — concepts, getting started, and hosting guides.
+- [Lens](https://github.com/Cratis/Lens) — Narrator's sibling browser extension for Cratis Arc apps.
+
+## The Cratis ecosystem
+
+This project is part of [Cratis](https://www.cratis.io) — free, MIT-licensed tools for building event-sourced and CQRS applications.
+
+- **[Chronicle](https://github.com/Cratis/Chronicle)** — event-sourcing database and runtime. Orleans-based kernel, pluggable storage (MongoDB default; PostgreSQL, SQL Server, SQLite, in-memory), language-agnostic gRPC contracts. [Docs](https://www.cratis.io/chronicle/)
+- **Chronicle clients** — first-class [.NET SDK](https://github.com/Cratis/Chronicle), plus [TypeScript](https://github.com/Cratis/Chronicle.TypeScript), [Kotlin/Java](https://github.com/Cratis/Chronicle.Kotlin), and [Elixir](https://github.com/Cratis/Chronicle.Elixir); [Python](https://github.com/Cratis/Chronicle.Python) coming soon (pre-alpha). AI agents connect through the [Chronicle MCP server](https://github.com/Cratis/Chronicle.Mcp).
+- **[Arc](https://github.com/Cratis/Arc)** — opinionated CQRS framework for ASP.NET Core with commands, queries, validation, authorization, and TypeScript proxy generation. Works without event sourcing. [Docs](https://www.cratis.io/arc/)
+- **[Components](https://github.com/Cratis/Components)** — React components aligned with Arc patterns. [Docs](https://www.cratis.io/components/)
+- **[CLI](https://github.com/Cratis/cli) + Workbench** — inspect and diagnose Chronicle from the terminal or the browser. [Docs](https://www.cratis.io/cli/)
+- **Model-first layer (experimental)** — [Studio](https://github.com/Cratis/Studio), [Screenplay](https://github.com/Cratis/Screenplay), [Stage](https://github.com/Cratis/Stage), [Scene](https://github.com/Cratis/Scene), [Prologue](https://github.com/Cratis/Prologue)
+- **Supporting** — [Fundamentals](https://github.com/Cratis/Fundamentals), [Specifications](https://github.com/Cratis/Specifications), [Synopsis](https://github.com/Cratis/Synopsis), [Lens](https://github.com/Cratis/Lens), and free [AI tooling](https://github.com/Cratis/AI) (preview); [Ensemble](https://github.com/Cratis/Ensemble) coming soon (pre-release)
+- **[Samples](https://github.com/Cratis/Samples)** — runnable event sourcing and CQRS samples for the whole stack
+
+Everything Cratis publishes today is MIT licensed and free to use.
 
 ---
 
