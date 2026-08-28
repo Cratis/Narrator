@@ -1,9 +1,18 @@
 {
     "name": "narrator",
     "displayName": "Narrator - Chronicle Explorer",
-    "description": "Browse and explore Cratis Chronicle event stores directly from VS Code",
+    "description": "Browse Cratis Chronicle event stores — event sourcing streams, namespaces, schemas, observers and projections — from VS Code",
     "version": "0.1.0",
     "publisher": "cratis",
+    "license": "MIT",
+    "keywords": [
+        "event sourcing",
+        "event store",
+        "cqrs",
+        "chronicle",
+        "cratis",
+        "event-driven"
+    ],
     "repository": {
         "type": "git",
         "url": "git+https://github.com/Cratis/Narrator.git"
@@ -13,6 +22,7 @@
         "vscode": "^1.85.0"
     },
     "categories": [
+        "Visualization",
         "Other"
     ],
     "activationEvents": [
