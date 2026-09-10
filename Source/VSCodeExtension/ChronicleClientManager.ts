@@ -389,8 +389,8 @@ export class ChronicleClientManager {
     async listEventStores(): Promise<string[]> {
         const services = this._services;
         if (!services) { return []; }
-        const response = await services.eventStores.getEventStores({});
-        return response.items ?? [];
+        const response = await services.eventStores.allEventStores({});
+        return (response.Data ?? []).map((eventStore) => eventStore.Name);
     }
 
     // ── Namespaces ───────────────────────────────────────────────────────────
@@ -398,8 +398,8 @@ export class ChronicleClientManager {
     async listNamespaces(eventStore: string): Promise<string[]> {
         const services = this._services;
         if (!services) { return []; }
-        const response = await services.namespaces.getNamespaces({ EventStore: eventStore });
-        return response.items ?? [];
+        const response = await services.namespaces.allNamespaces({ EventStore: eventStore });
+        return (response.Data ?? []).map((ns) => ns.Name);
     }
 
     // ── Namespace-scoped ─────────────────────────────────────────────────────
@@ -408,7 +408,7 @@ export class ChronicleClientManager {
         const services = this._services;
         if (!services) { return []; }
         const response = await services.recommendations.getRecommendations({ EventStore: eventStore, Namespace: namespace });
-        return (response.items ?? []).map((recommendation) => ({
+        return (response.Data ?? []).map((recommendation) => ({
             id: '(unknown)',
             name: recommendation.Name ?? '(unknown)',
             type: recommendation.Type ?? '',
@@ -418,8 +418,8 @@ export class ChronicleClientManager {
     async listJobs(eventStore: string, namespace: string): Promise<JobInfo[]> {
         const services = this._services;
         if (!services) { return []; }
-        const response = await services.jobs.getJobs({ EventStore: eventStore, Namespace: namespace });
-        return (response.items ?? []).map((job) => {
+        const response = await services.jobs.allJobs({ EventStore: eventStore, Namespace: namespace });
+        return (response.Data ?? []).map((job) => {
             const statusCode = job.Status ?? 0;
             return {
                 id: '(unknown)',
@@ -485,7 +485,7 @@ export class ChronicleClientManager {
         const services = this._services;
         if (!services) { return []; }
         const response = await services.identities.getIdentities({ EventStore: eventStore, Namespace: namespace });
-        return (response.items ?? []).map((identity) => ({
+        return (response.Data ?? []).map((identity) => ({
             subject: identity.Subject ?? '(unknown)',
             name: identity.Name ?? '(unknown)',
             userName: identity.UserName ?? '',
@@ -497,8 +497,8 @@ export class ChronicleClientManager {
     async listEventTypes(eventStore: string): Promise<EventTypeInfo[]> {
         const services = this._services;
         if (!services) { return []; }
-        const response = await services.eventTypes.getAllRegistrations({ EventStore: eventStore });
-        return (response.items ?? []).map((registration) => ({
+        const response = await services.eventTypes.allEventTypes({ EventStore: eventStore });
+        return (response.Data ?? []).map((registration) => ({
             id: registration.Type?.Id ?? '(unknown)',
             generation: registration.Type?.Generation ?? 1,
             tombstone: registration.Type?.Tombstone ?? false,
@@ -574,17 +574,17 @@ export class ChronicleClientManager {
     async getEventSequenceTail(eventStore: string, namespace: string, eventSequenceId: string): Promise<number> {
         const services = this._services;
         if (!services) { return 0; }
-        const response = await services.eventSequences.getTailSequenceNumber({
+        const response = await services.eventSequences.tailSequenceNumber({
             EventStore: eventStore,
             Namespace: namespace,
             EventSequenceId: eventSequenceId,
-            EventTypes: [],
+            EventTypeIds: '',
             EventSourceId: '',
             EventSourceType: '',
             EventStreamId: '',
             EventStreamType: '',
         });
-        return bigintToNumber(response.SequenceNumber ?? 0n);
+        return bigintToNumber(response.Data?.SequenceNumber ?? 0n);
     }
 
     async getEventsFromSequence(
@@ -596,40 +596,42 @@ export class ChronicleClientManager {
     ): Promise<AppendedEventInfo[]> {
         const services = this._services;
         if (!services) { return []; }
-        const response = await services.eventSequences.getEventsFromEventSequenceNumber({
+        const response = await services.eventSequences.fromSequenceNumber({
             EventStore: eventStore,
             Namespace: namespace,
             EventSequenceId: eventSequenceId,
             FromEventSequenceNumber: BigInt(fromSequenceNumber),
-            ToEventSequenceNumber: BigInt(toSequenceNumber),
             EventSourceId: '',
-            EventTypes: [],
+            EventTypeIds: '',
         });
-        return (response.Events ?? []).map((event) => {
-            const context = event.Context;
-            const causedBy = context?.CausedBy;
-            const contentRaw = event.Content ?? '';
-            return {
-                sequenceNumber: bigintToNumber(context?.SequenceNumber ?? 0n),
-                eventTypeId: context?.EventType?.Id ?? '(unknown)',
-                eventTypeGeneration: context?.EventType?.Generation ?? 1,
-                eventSourceType: context?.EventSourceType ?? '',
-                eventSourceId: context?.EventSourceId ?? '',
-                eventStreamType: context?.EventStreamType ?? '',
-                eventStreamId: context?.EventStreamId ?? '',
-                eventStore: context?.EventStore ?? '',
-                namespace: context?.Namespace ?? '',
-                occurred: context?.Occurred?.Value,
-                correlationId: undefined,
-                causedBySubject: causedBy?.Subject,
-                causedByName: causedBy?.Name,
-                causedByUserName: causedBy?.UserName,
-                observationState: context?.ObservationState ?? 0,
-                tags: context?.Tags ?? [],
-                hash: context?.Hash ?? '',
-                content: tryParseJson(contentRaw),
-                contentRaw,
-            };
-        });
+        // Chronicle 18 dropped the server-side upper bound, so the page is clamped here.
+        return (response.Data ?? [])
+            .filter((event) => bigintToNumber(event.Context?.SequenceNumber ?? 0n) <= toSequenceNumber)
+            .map((event) => {
+                const context = event.Context;
+                const causedBy = context?.CausedBy;
+                const contentRaw = event.Content ?? '';
+                return {
+                    sequenceNumber: bigintToNumber(context?.SequenceNumber ?? 0n),
+                    eventTypeId: context?.EventType?.Id ?? '(unknown)',
+                    eventTypeGeneration: context?.EventType?.Generation ?? 1,
+                    eventSourceType: context?.EventSourceType ?? '',
+                    eventSourceId: context?.EventSourceId ?? '',
+                    eventStreamType: context?.EventStreamType ?? '',
+                    eventStreamId: context?.EventStreamId ?? '',
+                    eventStore,
+                    namespace,
+                    occurred: context?.Occurred?.Value,
+                    correlationId: undefined,
+                    causedBySubject: causedBy?.Subject,
+                    causedByName: causedBy?.Name,
+                    causedByUserName: causedBy?.UserName,
+                    observationState: context?.ObservationState ?? 0,
+                    tags: context?.Tags ?? [],
+                    hash: context?.Hash ?? '',
+                    content: tryParseJson(contentRaw),
+                    contentRaw,
+                };
+            });
     }
 }
