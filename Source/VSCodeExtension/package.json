@@ -2,6 +2,7 @@
     "name": "narrator",
     "displayName": "Cratis Narrator - Chronicle Explorer",
     "description": "Browse Cratis Chronicle event stores — event sourcing streams, namespaces, schemas, observers and projections — from VS Code",
+    "homepage": "https://www.cratis.io/chronicle/",
     "version": "0.1.0",
     "publisher": "cratis",
     "license": "MIT",
