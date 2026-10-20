@@ -2,6 +2,8 @@
 
 # 🎙️ Narrator
 
+Cratis Narrator is a VS Code extension for developers to browse Cratis Chronicle event stores.
+
 **Reads your Cratis Chronicle event stores back to you — browse the streams, namespaces, and observers and follow the story your events tell, right inside VS Code.**
 
 [![Discord](https://img.shields.io/discord/1182595891576717413?label=Discord&logo=discord&logoColor=white)](https://discord.gg/kt4AMpV8WV)
@@ -138,6 +140,6 @@ Everything Cratis publishes today is MIT licensed and free to use.
 
 <div align="center">
 
-*Part of the [Cratis](https://cratis.io) platform · MIT licensed*
+*Part of the [Cratis](https://www.cratis.io) platform · MIT licensed*
 
 </div>
