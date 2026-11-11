@@ -15,6 +15,7 @@ export const host = {
     quickPickCalls: [] as unknown[][],
     confirmAnswer: undefined as string | undefined,
     connectFailure: undefined as unknown,
+    connectGates: new Map<string, Promise<void>>(),
     managers: [] as { name: string; context: unknown; connected: boolean; disconnected: boolean }[],
     loadedPaths: [] as unknown[],
 };
@@ -30,6 +31,7 @@ export function resetHost(): void {
     host.quickPickCalls.length = 0;
     host.confirmAnswer = undefined;
     host.connectFailure = undefined;
+    host.connectGates.clear();
     host.managers.length = 0;
     host.loadedPaths.length = 0;
 }
@@ -79,6 +81,7 @@ export function createManagerModule(): Record<string, unknown> {
         }
         async connect(): Promise<void> {
             host.log.push(`connect:${this._record.name}`);
+            await host.connectGates.get(this._record.name);
             if (host.connectFailure !== undefined) { throw host.connectFailure; }
             this._record.connected = true;
         }

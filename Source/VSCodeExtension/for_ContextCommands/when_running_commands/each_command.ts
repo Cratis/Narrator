@@ -334,3 +334,34 @@ describe('when activating a context', () => {
         expect(host.log.slice(-3)).toEqual(['tree:none:b', 'status:b:false:false', 'error:Failed to connect: down']);
     });
 });
+
+describe('when a second context is activated while the first is still connecting', () => {
+    let releaseA: () => void;
+    let firstActivation: Promise<void>;
+
+    beforeEach(async () => {
+        host.config = { activeContext: 'a', contexts: { a: { server: 's-a' }, b: { server: 's-b' } } };
+        setup();
+        host.connectGates.set('a', new Promise<void>(resolve => { releaseA = resolve; }));
+        firstActivation = run('narrator.activateContext', treeItem('a'));
+        await run('narrator.activateContext', treeItem('b'));
+        host.log.length = 0;
+        treeCalls.length = 0;
+        releaseA();
+        await firstActivation;
+    });
+
+    it('should label the tree with the live active context and its client manager', () => {
+        expect(treeCalls).toHaveLength(1);
+        expect(treeCalls[0].manager).toBe(state.clientManager);
+        expect(host.log).toContain('tree:manager:b');
+    });
+
+    it('should report the status of the context that finished connecting', () => {
+        expect(host.log).toContain('status:a:true:false');
+    });
+
+    it('should keep the second context active', () => {
+        expect(state.activeContextName).toBe('b');
+    });
+});

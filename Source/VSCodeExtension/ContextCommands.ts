@@ -16,7 +16,16 @@ export interface ExtensionState {
     outputChannel: vscode.OutputChannel;
 }
 
+/** Whether a post-connect UI update reads the live state (which may have moved on) or the name being switched to. */
+type NameSource = 'state' | 'local';
+
 interface SwitchOptions {
+    /** Name shown in the tree after connecting; defaults to the live `state.activeContextName`. */
+    treeName?: NameSource;
+    /** Name shown in the status bar after connecting; defaults to the name being switched to. */
+    statusName?: NameSource;
+    /** Whether to record the name as the active context before connecting; defaults to true. */
+    markActive?: boolean;
     /** Show the "Switched to context" message after a successful connection. */
     announce?: boolean;
     failureMessage?: (reason: string) => string;
@@ -46,19 +55,23 @@ async function switchTo(
     const { state, statusBar, treeDataProvider } = scope;
     state.clientManager?.disconnect();
     state.clientManager = new ChronicleClientManager(contextName, config.contexts[contextName], state.outputChannel);
-    state.activeContextName = contextName;
+    if (options.markActive ?? true) {
+        state.activeContextName = contextName;
+    }
     updateStatusBar(statusBar, contextName, false, true);
+    const treeName = () => (options.treeName === 'local' ? contextName : state.activeContextName);
+    const statusName = () => (options.statusName === 'state' ? state.activeContextName : contextName);
     try {
         await state.clientManager.connect();
-        treeDataProvider.setClientManager(state.clientManager, contextName, config);
-        updateStatusBar(statusBar, contextName, true);
+        treeDataProvider.setClientManager(state.clientManager, treeName(), config);
+        updateStatusBar(statusBar, statusName(), true);
         if (options.announce) {
             vscode.window.showInformationMessage(`Switched to context: ${contextName}`);
         }
     } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
-        treeDataProvider.setClientManager(undefined, contextName, config);
-        updateStatusBar(statusBar, contextName, false);
+        treeDataProvider.setClientManager(undefined, treeName(), config);
+        updateStatusBar(statusBar, statusName(), false);
         const failureMessage = options.failureMessage ?? (r => `Failed to connect: ${r}`);
         vscode.window.showErrorMessage(failureMessage(reason));
     }
@@ -107,7 +120,7 @@ async function addContext(scope: CommandScope, prefillName?: string): Promise<vo
     if (await shouldActivateNewContext(freshConfig, contextName)) {
         freshConfig.activeContext = contextName;
         saveConfiguration(freshConfig, scope.getEffectiveConfigPath());
-        await switchTo(scope, contextName, freshConfig);
+        await switchTo(scope, contextName, freshConfig, { statusName: 'state' });
     } else {
         refreshTree(scope, freshConfig);
     }
@@ -132,6 +145,7 @@ async function setContext(scope: CommandScope): Promise<void> {
 
     await switchTo(scope, selected, currentConfig, {
         announce: true,
+        treeName: 'local',
         failureMessage: reason => `Failed to connect to context "${selected}": ${reason}`,
     });
 }
@@ -156,7 +170,7 @@ async function editContext(scope: CommandScope, item?: vscode.TreeItem): Promise
     saveConfiguration(freshConfig, scope.getEffectiveConfigPath());
 
     if (contextName === scope.state.activeContextName) {
-        await switchTo(scope, contextName, freshConfig);
+        await switchTo(scope, contextName, freshConfig, { markActive: false });
     } else {
         refreshTree(scope, freshConfig);
     }

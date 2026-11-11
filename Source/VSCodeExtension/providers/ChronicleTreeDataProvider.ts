@@ -65,7 +65,7 @@ export interface ChronicleTreeItemDetails {
     data: Record<string, unknown>;
 }
 
-export interface ChronicleTreeItemOptions {
+interface ChronicleTreeItemOptions {
     eventStoreName?: string;
     namespaceName?: string;
     description?: string;
