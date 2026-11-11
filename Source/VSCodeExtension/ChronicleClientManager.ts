@@ -18,6 +18,7 @@ import type {
     ReducersClient,
 } from '@cratis/chronicle.contracts';
 import type { Channel } from 'nice-grpc';
+import type { ClientMiddleware, Metadata } from 'nice-grpc-common';
 import type * as vscode from 'vscode';
 import { Context } from './Configuration';
 import {
@@ -26,6 +27,7 @@ import {
     composeEffectiveConnectionString,
     getTokenCachePath,
     parseConnection,
+    type ParsedConnection,
 } from './Auth';
 
 function formatError(error: unknown): string {
@@ -233,6 +235,142 @@ function tryParseJson(text: string | undefined): unknown {
     }
 }
 
+type NiceGrpc = typeof import('nice-grpc');
+type NiceGrpcCommon = typeof import('nice-grpc-common');
+type Contracts = typeof import('@cratis/chronicle.contracts');
+type ClientFactory = ReturnType<NiceGrpc['createClientFactory']>;
+type Logger = (message: string) => void;
+
+interface AuthenticationSetup {
+    apiKey?: string;
+    tokenProvider?: CachingTokenProvider;
+}
+
+// Use nice-grpc's bundled `@grpc/grpc-js` credentials so they match the channel type
+// nice-grpc expects — the top-level grpc-js install ships its own duplicate types.
+// The Kernel's single port is TLS-only and, in development, serves a self-signed
+// certificate. `@grpc/grpc-js` has no per-error hook to bypass just the untrusted-root
+// case, so — mirroring the TypeScript Chronicle client — skip chain validation entirely
+// whenever TLS is enabled, since this client never pins an expected server certificate.
+function createChannelCredentials(niceGrpc: NiceGrpc, disableTls: boolean) {
+    return disableTls
+        ? niceGrpc.ChannelCredentials.createInsecure()
+        : niceGrpc.ChannelCredentials.createSsl(null, null, null, { rejectUnauthorized: false });
+}
+
+async function attachToken(metadata: Metadata, tokenProvider: CachingTokenProvider, log: Logger): Promise<void> {
+    try {
+        const token = await tokenProvider.getAccessToken();
+        if (token) {
+            metadata.set('authorization', `Bearer ${token}`);
+        } else {
+            log('[Chronicle] WARNING: token provider returned no token');
+        }
+    } catch (error) {
+        log(`[Chronicle] ERROR fetching token: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+
+function isUnauthenticated(niceGrpcCommon: NiceGrpcCommon, error: unknown): boolean {
+    return error instanceof niceGrpcCommon.ClientError && error.code === niceGrpcCommon.Status.UNAUTHENTICATED;
+}
+
+// Auth middleware — attaches Bearer/API-key to every outbound call and invalidates
+// the cached token on UNAUTHENTICATED so the next call refetches.
+function createAuthMiddleware(
+    niceGrpcCommon: NiceGrpcCommon,
+    tokenProvider: CachingTokenProvider | undefined,
+    apiKey: string | undefined,
+    log: Logger,
+): ClientMiddleware {
+    return async function* (call, options) {
+        const metadata = niceGrpcCommon.Metadata(options.metadata);
+        if (tokenProvider) {
+            await attachToken(metadata, tokenProvider, log);
+        } else if (apiKey) {
+            metadata.set('authorization', `Bearer ${apiKey}`);
+        }
+        try {
+            return yield* call.next(call.request, { ...options, metadata });
+        } catch (error) {
+            if (tokenProvider && isUnauthenticated(niceGrpcCommon, error)) {
+                log('[Chronicle] Server returned UNAUTHENTICATED — clearing cached token');
+                tokenProvider.invalidate();
+            }
+            throw error;
+        }
+    };
+}
+
+function createServices(contracts: Contracts, factory: ClientFactory, channel: Channel): ChronicleServices {
+    return {
+        channel,
+        eventStores: factory.create(contracts.EventStoresDefinition, channel),
+        namespaces: factory.create(contracts.NamespacesDefinition, channel),
+        recommendations: factory.create(contracts.RecommendationsDefinition, channel),
+        identities: factory.create(contracts.IdentitiesDefinition, channel),
+        eventSequences: factory.create(contracts.EventSequencesDefinition, channel),
+        eventTypes: factory.create(contracts.EventTypesDefinition, channel),
+        constraints: factory.create(contracts.ConstraintsDefinition, channel),
+        observers: factory.create(contracts.ObserversDefinition, channel),
+        failedPartitions: factory.create(contracts.FailedPartitionsDefinition, channel),
+        reactors: factory.create(contracts.ReactorsDefinition, channel),
+        reducers: factory.create(contracts.ReducersDefinition, channel),
+        projections: factory.create(contracts.ProjectionsDefinition, channel),
+        readModels: factory.create(contracts.ReadModelsDefinition, channel),
+        jobs: factory.create(contracts.JobsDefinition, channel),
+    };
+}
+
+type SequencedEvent = NonNullable<Awaited<ReturnType<EventSequencesClient['fromSequenceNumber']>>['Data']>[number];
+
+type SequencedEventContext = SequencedEvent['Context'];
+
+function toEventTypeFields(context: SequencedEventContext) {
+    return {
+        eventTypeId: context?.EventType?.Id ?? '(unknown)',
+        eventTypeGeneration: context?.EventType?.Generation ?? 1,
+    };
+}
+
+function toEventSourceFields(context: SequencedEventContext) {
+    return {
+        eventSourceType: context?.EventSourceType ?? '',
+        eventSourceId: context?.EventSourceId ?? '',
+        eventStreamType: context?.EventStreamType ?? '',
+        eventStreamId: context?.EventStreamId ?? '',
+    };
+}
+
+function toCausedByFields(context: SequencedEventContext) {
+    const causedBy = context?.CausedBy;
+    return {
+        causedBySubject: causedBy?.Subject,
+        causedByName: causedBy?.Name,
+        causedByUserName: causedBy?.UserName,
+    };
+}
+
+function toAppendedEventInfo(event: SequencedEvent, eventStore: string, namespace: string): AppendedEventInfo {
+    const context = event.Context;
+    const contentRaw = event.Content ?? '';
+    return {
+        sequenceNumber: bigintToNumber(context?.SequenceNumber ?? 0n),
+        ...toEventTypeFields(context),
+        ...toEventSourceFields(context),
+        eventStore,
+        namespace,
+        occurred: context?.Occurred?.Value,
+        correlationId: undefined,
+        ...toCausedByFields(context),
+        observationState: context?.ObservationState ?? 0,
+        tags: context?.Tags ?? [],
+        hash: context?.Hash ?? '',
+        content: tryParseJson(contentRaw),
+        contentRaw,
+    };
+}
+
 export class ChronicleClientManager {
     private _services: ChronicleServices | undefined;
     private _tokenProvider: CachingTokenProvider | undefined;
@@ -265,112 +403,58 @@ export class ChronicleClientManager {
 
         this._log(`[Chronicle] Connecting to ${address} (TLS=${!parsed.disableTls})`);
 
-        // Use nice-grpc's bundled `@grpc/grpc-js` credentials so they match the channel type
-        // nice-grpc expects — the top-level grpc-js install ships its own duplicate types.
-        // The Kernel's single port is TLS-only and, in development, serves a self-signed
-        // certificate. `@grpc/grpc-js` has no per-error hook to bypass just the untrusted-root
-        // case, so — mirroring the TypeScript Chronicle client — skip chain validation entirely
-        // whenever TLS is enabled, since this client never pins an expected server certificate.
-        const channelCredentials = parsed.disableTls
-            ? niceGrpc.ChannelCredentials.createInsecure()
-            : niceGrpc.ChannelCredentials.createSsl(null, null, null, { rejectUnauthorized: false });
+        const channelCredentials = createChannelCredentials(niceGrpc, parsed.disableTls);
+        const { apiKey, tokenProvider } = await this.resolveAuthentication(parsed);
+        const authMiddleware = createAuthMiddleware(niceGrpcCommon, tokenProvider, apiKey, this._log.bind(this));
 
-        let apiKey: string | undefined;
+        const channel = niceGrpc.createChannel(address, channelCredentials);
+        const factory = niceGrpc.createClientFactory().use(authMiddleware);
+
+        this._services = createServices(contracts, factory, channel);
+
+        this._log('[Chronicle] All gRPC service clients created. Connection ready.');
+    }
+
+    private async resolveAuthentication(parsed: ParsedConnection): Promise<AuthenticationSetup> {
         this._tokenProvider = undefined;
 
         switch (parsed.authMode) {
             case AuthMode.ApiKey:
                 this._log('[Chronicle] Auth mode: API key');
-                apiKey = parsed.apiKey;
-                break;
-            case AuthMode.ClientCredentials: {
+                return { apiKey: parsed.apiKey };
+            case AuthMode.ClientCredentials:
                 this._log(`[Chronicle] Auth mode: client_credentials (clientId=${parsed.username})`);
-                const cachePath = getTokenCachePath(this._contextName, parsed.username ?? '');
-                this._tokenProvider = new CachingTokenProvider(
-                    cachePath,
-                    {
-                        host: parsed.host,
-                        port: parsed.port,
-                        disableTls: parsed.disableTls,
-                        clientId: parsed.username ?? '',
-                        clientSecret: parsed.password ?? '',
-                    },
-                    this._log,
-                );
-                // Eagerly fetch the token so connect() fails fast when auth is broken,
-                // instead of every later gRPC call returning UNAUTHENTICATED.
-                try {
-                    await this._tokenProvider.getAccessToken();
-                } catch (error) {
-                    const detail = formatError(error);
-                    this._log(`[Chronicle] Initial token fetch failed: ${detail}`);
-                    throw new Error(`Token endpoint unreachable or rejected the request — ${detail}`, { cause: error });
-                }
-                break;
-            }
+                await this.createTokenProvider(parsed);
+                return { tokenProvider: this._tokenProvider };
             case AuthMode.None:
                 this._log('[Chronicle] Auth mode: none');
-                break;
+                return {};
         }
+    }
 
-        const log = this._log.bind(this);
-        const tokenProvider = this._tokenProvider;
-
-        // Auth middleware — attaches Bearer/API-key to every outbound call and invalidates
-        // the cached token on UNAUTHENTICATED so the next call refetches.
-        const authMiddleware: import('nice-grpc-common').ClientMiddleware = async function* (call, options) {
-            const metadata = niceGrpcCommon.Metadata(options.metadata);
-            if (tokenProvider) {
-                try {
-                    const token = await tokenProvider.getAccessToken();
-                    if (token) {
-                        metadata.set('authorization', `Bearer ${token}`);
-                    } else {
-                        log('[Chronicle] WARNING: token provider returned no token');
-                    }
-                } catch (error) {
-                    log(`[Chronicle] ERROR fetching token: ${error instanceof Error ? error.message : String(error)}`);
-                }
-            } else if (apiKey) {
-                metadata.set('authorization', `Bearer ${apiKey}`);
-            }
-            try {
-                return yield* call.next(call.request, { ...options, metadata });
-            } catch (error) {
-                if (
-                    error instanceof niceGrpcCommon.ClientError &&
-                    error.code === niceGrpcCommon.Status.UNAUTHENTICATED &&
-                    tokenProvider
-                ) {
-                    log('[Chronicle] Server returned UNAUTHENTICATED — clearing cached token');
-                    tokenProvider.invalidate();
-                }
-                throw error;
-            }
-        };
-
-        const channel = niceGrpc.createChannel(address, channelCredentials);
-        const factory = niceGrpc.createClientFactory().use(authMiddleware);
-
-        this._services = {
-            channel,
-            eventStores: factory.create(contracts.EventStoresDefinition, channel),
-            namespaces: factory.create(contracts.NamespacesDefinition, channel),
-            recommendations: factory.create(contracts.RecommendationsDefinition, channel),
-            identities: factory.create(contracts.IdentitiesDefinition, channel),
-            eventSequences: factory.create(contracts.EventSequencesDefinition, channel),
-            eventTypes: factory.create(contracts.EventTypesDefinition, channel),
-            constraints: factory.create(contracts.ConstraintsDefinition, channel),
-            observers: factory.create(contracts.ObserversDefinition, channel),
-            failedPartitions: factory.create(contracts.FailedPartitionsDefinition, channel),
-            reactors: factory.create(contracts.ReactorsDefinition, channel),
-            reducers: factory.create(contracts.ReducersDefinition, channel),
-            projections: factory.create(contracts.ProjectionsDefinition, channel),
-            readModels: factory.create(contracts.ReadModelsDefinition, channel),
-            jobs: factory.create(contracts.JobsDefinition, channel),
-        };
-
-        this._log('[Chronicle] All gRPC service clients created. Connection ready.');
+    private async createTokenProvider(parsed: ParsedConnection): Promise<void> {
+        const cachePath = getTokenCachePath(this._contextName, parsed.username ?? '');
+        const tokenProvider = new CachingTokenProvider(
+            cachePath,
+            {
+                host: parsed.host,
+                port: parsed.port,
+                disableTls: parsed.disableTls,
+                clientId: parsed.username ?? '',
+                clientSecret: parsed.password ?? '',
+            },
+            this._log,
+        );
+        this._tokenProvider = tokenProvider;
+        // Eagerly fetch the token so connect() fails fast when auth is broken,
+        // instead of every later gRPC call returning UNAUTHENTICATED.
+        try {
+            await tokenProvider.getAccessToken();
+        } catch (error) {
+            const detail = formatError(error);
+            this._log(`[Chronicle] Initial token fetch failed: ${detail}`);
+            throw new Error(`Token endpoint unreachable or rejected the request — ${detail}`, { cause: error });
+        }
     }
 
     disconnect(): void {
@@ -607,31 +691,6 @@ export class ChronicleClientManager {
         // Chronicle 18 dropped the server-side upper bound, so the page is clamped here.
         return (response.Data ?? [])
             .filter((event) => bigintToNumber(event.Context?.SequenceNumber ?? 0n) <= toSequenceNumber)
-            .map((event) => {
-                const context = event.Context;
-                const causedBy = context?.CausedBy;
-                const contentRaw = event.Content ?? '';
-                return {
-                    sequenceNumber: bigintToNumber(context?.SequenceNumber ?? 0n),
-                    eventTypeId: context?.EventType?.Id ?? '(unknown)',
-                    eventTypeGeneration: context?.EventType?.Generation ?? 1,
-                    eventSourceType: context?.EventSourceType ?? '',
-                    eventSourceId: context?.EventSourceId ?? '',
-                    eventStreamType: context?.EventStreamType ?? '',
-                    eventStreamId: context?.EventStreamId ?? '',
-                    eventStore,
-                    namespace,
-                    occurred: context?.Occurred?.Value,
-                    correlationId: undefined,
-                    causedBySubject: causedBy?.Subject,
-                    causedByName: causedBy?.Name,
-                    causedByUserName: causedBy?.UserName,
-                    observationState: context?.ObservationState ?? 0,
-                    tags: context?.Tags ?? [],
-                    hash: context?.Hash ?? '',
-                    content: tryParseJson(contentRaw),
-                    contentRaw,
-                };
-            });
+            .map((event) => toAppendedEventInfo(event, eventStore, namespace));
     }
 }
