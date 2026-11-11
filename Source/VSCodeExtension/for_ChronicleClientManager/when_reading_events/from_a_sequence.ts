@@ -21,6 +21,30 @@ const fullEvent = {
     Content: '{"x":1}',
 };
 
+const sparseEvent: AppendedEventInfo = {
+    sequenceNumber: 0,
+    eventTypeId: '(unknown)',
+    eventTypeGeneration: 1,
+    eventSourceType: '',
+    eventSourceId: '',
+    eventStreamType: '',
+    eventStreamId: '',
+    eventStore: 'store',
+    namespace: 'ns',
+    occurred: undefined,
+    correlationId: undefined,
+    causedBySubject: undefined,
+    causedByName: undefined,
+    causedByUserName: undefined,
+    observationState: 0,
+    tags: [],
+    hash: '',
+    content: undefined,
+    contentRaw: '',
+};
+
+const expectedEvent = (overrides: Partial<AppendedEventInfo>): AppendedEventInfo => ({ ...sparseEvent, ...overrides });
+
 function createManager(response: unknown, calls: unknown[]): ChronicleClientManager {
     const manager = new ChronicleClientManager('ctx', {});
     (manager as unknown as { _services: unknown })._services = {
@@ -59,7 +83,7 @@ describe('when reading events from a sequence', () => {
     });
 
     it('should map a full event', () => {
-        expect(result[0]).toEqual({
+        expect(result[0]).toEqual(expectedEvent({
             sequenceNumber: 5,
             eventTypeId: 'type-1',
             eventTypeGeneration: 2,
@@ -67,10 +91,7 @@ describe('when reading events from a sequence', () => {
             eventSourceId: 'src-id',
             eventStreamType: 'stream-type',
             eventStreamId: 'stream-id',
-            eventStore: 'store',
-            namespace: 'ns',
             occurred: '2024-01-01T00:00:00Z',
-            correlationId: undefined,
             causedBySubject: 'sub',
             causedByName: 'name',
             causedByUserName: 'user',
@@ -79,31 +100,11 @@ describe('when reading events from a sequence', () => {
             hash: 'hash',
             content: { x: 1 },
             contentRaw: '{"x":1}',
-        });
+        }));
     });
 
     it('should default the fields of a sparse event', () => {
-        expect(result[1]).toEqual({
-            sequenceNumber: 0,
-            eventTypeId: '(unknown)',
-            eventTypeGeneration: 1,
-            eventSourceType: '',
-            eventSourceId: '',
-            eventStreamType: '',
-            eventStreamId: '',
-            eventStore: 'store',
-            namespace: 'ns',
-            occurred: undefined,
-            correlationId: undefined,
-            causedBySubject: undefined,
-            causedByName: undefined,
-            causedByUserName: undefined,
-            observationState: 0,
-            tags: [],
-            hash: '',
-            content: undefined,
-            contentRaw: '',
-        });
+        expect(result[1]).toEqual(expectedEvent({}));
     });
 });
 
