@@ -127,47 +127,67 @@ function post(panel: vscode.WebviewPanel, message: OutgoingMessage): void {
     void panel.webview.postMessage(message);
 }
 
+const NOT_SET = '(not set)';
+const NONE = '(none)';
+
 function toRow(event: AppendedEventInfo): EventRow {
-    const context: Record<string, unknown> = {
-        sequenceNumber: event.sequenceNumber,
-        eventType: `${event.eventTypeId} (generation ${event.eventTypeGeneration})`,
-        eventSourceType: event.eventSourceType || '(not set)',
-        eventSourceId: event.eventSourceId || '(not set)',
-        eventStreamType: event.eventStreamType || '(not set)',
-        eventStreamId: event.eventStreamId || '(not set)',
-        eventStore: event.eventStore,
-        namespace: event.namespace,
-        occurred: event.occurred ?? '(unknown)',
-        correlationId: event.correlationId ?? '(none)',
-        causedBy: formatCausedBy(event),
-        observationState: String(event.observationState),
-        tags: event.tags.length > 0 ? event.tags.join(', ') : '(none)',
-        hash: event.hash || '(none)',
-    };
-    const content =
-        event.content && typeof event.content === 'object' && !Array.isArray(event.content)
-            ? (event.content as Record<string, unknown>)
-            : event.contentRaw;
     return {
         sequenceNumber: event.sequenceNumber,
         eventType: event.eventTypeId,
         eventSourceId: event.eventSourceId,
         occurred: event.occurred,
-        context,
-        content,
+        context: toContext(event),
+        content: toContent(event),
     };
+}
+
+function toContext(event: AppendedEventInfo): Record<string, unknown> {
+    return {
+        sequenceNumber: event.sequenceNumber,
+        eventType: `${event.eventTypeId} (generation ${event.eventTypeGeneration})`,
+        eventSourceType: event.eventSourceType || NOT_SET,
+        eventSourceId: event.eventSourceId || NOT_SET,
+        eventStreamType: event.eventStreamType || NOT_SET,
+        eventStreamId: event.eventStreamId || NOT_SET,
+        eventStore: event.eventStore,
+        namespace: event.namespace,
+        occurred: event.occurred ?? '(unknown)',
+        correlationId: event.correlationId ?? NONE,
+        causedBy: formatCausedBy(event),
+        observationState: String(event.observationState),
+        tags: event.tags.length > 0 ? event.tags.join(', ') : NONE,
+        hash: event.hash || NONE,
+    };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function toContent(event: AppendedEventInfo): Record<string, unknown> | string {
+    return isPlainObject(event.content) ? event.content : event.contentRaw;
 }
 
 function formatCausedBy(event: AppendedEventInfo): string {
     const parts = [event.causedByName, event.causedByUserName, event.causedBySubject].filter(
         (part): part is string => typeof part === 'string' && part.length > 0
     );
-    return parts.length > 0 ? Array.from(new Set(parts)).join(' · ') : '(none)';
+    return parts.length > 0 ? Array.from(new Set(parts)).join(' · ') : NONE;
 }
 
-function renderHtml(meta: { sequenceName: string; namespace: string; eventStore: string }): string {
+interface ViewerMeta {
+    sequenceName: string;
+    namespace: string;
+    eventStore: string;
+}
+
+function renderHtml(meta: ViewerMeta): string {
     // The webview is fully self-contained — message protocol exchanges fetched pages
     // with the extension, so no external resource loading is needed.
+    return [renderHead(meta), renderBody(meta), renderScript()].join('\n');
+}
+
+function renderHead(meta: ViewerMeta): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -208,8 +228,11 @@ function renderHtml(meta: { sequenceName: string; namespace: string; eventStore:
     .error { color: var(--vscode-errorForeground); padding: 16px; }
     .raw { white-space: pre-wrap; padding: 8px 12px; font-family: var(--vscode-editor-font-family); font-size: 0.9em; }
 </style>
-</head>
-<body>
+</head>`;
+}
+
+function renderBody(meta: ViewerMeta): string {
+    return `<body>
 <header>
     <div>
         <h2>${escapeHtml(meta.sequenceName)}</h2>
@@ -245,8 +268,11 @@ function renderHtml(meta: { sequenceName: string; namespace: string; eventStore:
             <div class="empty">Select an event to view its details.</div>
         </div>
     </aside>
-</div>
-<script>
+</div>`;
+}
+
+function renderScript(): string {
+    return `<script>
     const vscode = acquireVsCodeApi();
     const rowsEl = document.getElementById('rows');
     const emptyEl = document.getElementById('emptyState');
