@@ -88,35 +88,51 @@ function buildNodes(data: Record<string, unknown>): DetailsNode[] {
         .map(([key, value]) => toNode(formatKey(key), value));
 }
 
+function isPrimitive(value: unknown): value is string | number | boolean {
+    return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+}
+
 function toNode(label: string, value: unknown): DetailsNode {
     if (value === null || value === undefined) {
         return { label, value: 'null' };
     }
-    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-        const text = String(value);
-        return { label, value: text, tooltip: text };
+    if (isPrimitive(value)) {
+        return primitiveNode(label, value);
     }
     if (Array.isArray(value)) {
-        if (value.length === 0) {
-            return { label, value: 'empty' };
-        }
-        return {
-            label,
-            value: `${value.length} item${value.length === 1 ? '' : 's'}`,
-            children: value.map((entry, index) => toNode(`[${index}]`, entry)),
-        };
+        return arrayNode(label, value);
     }
     if (typeof value === 'object') {
-        const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined);
-        if (entries.length === 0) {
-            return { label, value: '(empty)' };
-        }
-        return {
-            label,
-            children: entries.map(([k, v]) => toNode(formatKey(k), v)),
-        };
+        return objectNode(label, value as Record<string, unknown>);
     }
     return { label, value: String(value) };
+}
+
+function primitiveNode(label: string, value: string | number | boolean): DetailsNode {
+    const text = String(value);
+    return { label, value: text, tooltip: text };
+}
+
+function arrayNode(label: string, items: unknown[]): DetailsNode {
+    if (items.length === 0) {
+        return { label, value: 'empty' };
+    }
+    return {
+        label,
+        value: `${items.length} item${items.length === 1 ? '' : 's'}`,
+        children: items.map((entry, index) => toNode(`[${index}]`, entry)),
+    };
+}
+
+function objectNode(label: string, value: Record<string, unknown>): DetailsNode {
+    const entries = Object.entries(value).filter(([, v]) => v !== undefined);
+    if (entries.length === 0) {
+        return { label, value: '(empty)' };
+    }
+    return {
+        label,
+        children: entries.map(([k, v]) => toNode(formatKey(k), v)),
+    };
 }
 
 /** Turns `lastHandledEventSequenceNumber` into `Last Handled Event Sequence Number`. */

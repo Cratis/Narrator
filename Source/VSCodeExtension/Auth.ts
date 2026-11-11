@@ -72,19 +72,21 @@ export function parseConnection(connectionString: string): ParsedConnection {
     const host = url.hostname || 'localhost';
     const port = url.port ? parseInt(url.port, 10) : DEFAULT_CHRONICLE_PORT;
     const disableTls = url.searchParams.get('disableTls') === 'true';
-    const apiKeyRaw = url.searchParams.get('apiKey');
-    const apiKey = apiKeyRaw ? apiKeyRaw : undefined;
-    const username = url.username ? decodeURIComponent(url.username) : undefined;
-    const password = url.password ? decodeURIComponent(url.password) : undefined;
-
-    let authMode = AuthMode.None;
-    if (apiKey) {
-        authMode = AuthMode.ApiKey;
-    } else if (username && password) {
-        authMode = AuthMode.ClientCredentials;
-    }
+    const apiKey = url.searchParams.get('apiKey') || undefined;
+    const username = decodeOptional(url.username);
+    const password = decodeOptional(url.password);
+    const authMode = determineAuthMode(apiKey, username, password);
 
     return { host, port, username, password, apiKey, disableTls, authMode };
+}
+
+function decodeOptional(value: string): string | undefined {
+    return value ? decodeURIComponent(value) : undefined;
+}
+
+function determineAuthMode(apiKey?: string, username?: string, password?: string): AuthMode {
+    if (apiKey) { return AuthMode.ApiKey; }
+    return username && password ? AuthMode.ClientCredentials : AuthMode.None;
 }
 
 export function getTokenCachePath(contextName: string, username: string): string {

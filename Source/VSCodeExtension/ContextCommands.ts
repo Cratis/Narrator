@@ -2,7 +2,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 import * as vscode from 'vscode';
-import { loadConfiguration, saveConfiguration, getConfigPath } from './Configuration';
+import { Configuration, loadConfiguration, saveConfiguration, getConfigPath } from './Configuration';
 import { ChronicleClientManager } from './ChronicleClientManager';
 import { ChronicleTreeDataProvider } from './providers/ChronicleTreeDataProvider';
 import { updateStatusBar } from './StatusBar';
@@ -16,6 +16,216 @@ export interface ExtensionState {
     outputChannel: vscode.OutputChannel;
 }
 
+/** Whether a post-connect UI update reads the live state (which may have moved on) or the name being switched to. */
+type NameSource = 'state' | 'local';
+
+interface SwitchOptions {
+    /** Name shown in the tree after connecting; defaults to the live `state.activeContextName`. */
+    treeName?: NameSource;
+    /** Name shown in the status bar after connecting; defaults to the name being switched to. */
+    statusName?: NameSource;
+    /** Whether to record the name as the active context before connecting; defaults to true. */
+    markActive?: boolean;
+    /** Show the "Switched to context" message after a successful connection. */
+    announce?: boolean;
+    failureMessage?: (reason: string) => string;
+}
+
+/** Everything a command handler needs to read, change and refresh the connection state. */
+interface CommandScope {
+    state: ExtensionState;
+    statusBar: vscode.StatusBarItem;
+    treeDataProvider: ChronicleTreeDataProvider;
+    getEffectiveConfigPath: () => string | undefined;
+}
+
+const requiredInput = (message: string) => (value?: string) => (!value?.trim() ? message : undefined);
+
+function contextNameOf(item?: vscode.TreeItem): string | undefined {
+    return typeof item?.label === 'string' ? item.label : undefined;
+}
+
+/** Replaces the client manager with one for the named context, connects it and refreshes the UI. */
+async function switchTo(
+    scope: CommandScope,
+    contextName: string,
+    config: Configuration,
+    options: SwitchOptions = {}
+): Promise<void> {
+    const { state, statusBar, treeDataProvider } = scope;
+    state.clientManager?.disconnect();
+    state.clientManager = new ChronicleClientManager(contextName, config.contexts[contextName], state.outputChannel);
+    if (options.markActive ?? true) {
+        state.activeContextName = contextName;
+    }
+    updateStatusBar(statusBar, contextName, false, true);
+    const treeName = () => (options.treeName === 'local' ? contextName : state.activeContextName);
+    const statusName = () => (options.statusName === 'state' ? state.activeContextName : contextName);
+    try {
+        await state.clientManager.connect();
+        treeDataProvider.setClientManager(state.clientManager, treeName(), config);
+        updateStatusBar(statusBar, statusName(), true);
+        if (options.announce) {
+            vscode.window.showInformationMessage(`Switched to context: ${contextName}`);
+        }
+    } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        treeDataProvider.setClientManager(undefined, treeName(), config);
+        updateStatusBar(statusBar, statusName(), false);
+        const failureMessage = options.failureMessage ?? (r => `Failed to connect: ${r}`);
+        vscode.window.showErrorMessage(failureMessage(reason));
+    }
+}
+
+function refreshTree(scope: CommandScope, config: Configuration): void {
+    scope.treeDataProvider.setClientManager(scope.state.clientManager, scope.state.activeContextName, config);
+}
+
+async function shouldActivateNewContext(config: Configuration, name: string): Promise<boolean> {
+    if (config.activeContext === name) { return true; }
+    const answer = await vscode.window.showQuickPick(['Yes', 'No'], {
+        placeHolder: `Set "${name}" as the active context?`,
+    });
+    return answer === 'Yes';
+}
+
+async function addContext(scope: CommandScope, prefillName?: string): Promise<void> {
+    const name = await vscode.window.showInputBox({
+        title: 'Add Chronicle Context (1/2)',
+        prompt: 'Context name',
+        value: prefillName ?? '',
+        placeHolder: 'default',
+        validateInput: requiredInput('Name is required'),
+    });
+    if (!name) { return; }
+
+    const server = await vscode.window.showInputBox({
+        title: 'Add Chronicle Context (2/2)',
+        prompt: 'Chronicle server URL',
+        placeHolder: 'chronicle://localhost:35000',
+        validateInput: requiredInput('Server URL is required'),
+    });
+    if (!server) { return; }
+
+    const contextName = name.trim();
+    const freshConfig = loadConfiguration(scope.getEffectiveConfigPath());
+    freshConfig.contexts[contextName] = {
+        server: server.trim(),
+    };
+    if (!freshConfig.activeContext) {
+        freshConfig.activeContext = contextName;
+    }
+    saveConfiguration(freshConfig, scope.getEffectiveConfigPath());
+
+    if (await shouldActivateNewContext(freshConfig, contextName)) {
+        freshConfig.activeContext = contextName;
+        saveConfiguration(freshConfig, scope.getEffectiveConfigPath());
+        await switchTo(scope, contextName, freshConfig, { statusName: 'state' });
+    } else {
+        refreshTree(scope, freshConfig);
+    }
+}
+
+async function setContext(scope: CommandScope): Promise<void> {
+    const currentConfig = loadConfiguration(scope.getEffectiveConfigPath());
+    const contextNames = Object.keys(currentConfig.contexts);
+    if (contextNames.length === 0) {
+        const configLocation = scope.getEffectiveConfigPath() ?? getConfigPath();
+        vscode.window.showWarningMessage(`No contexts found in ${configLocation}`);
+        return;
+    }
+
+    const selected = await vscode.window.showQuickPick(contextNames, {
+        placeHolder: 'Select active context',
+    });
+    if (!selected) { return; }
+
+    currentConfig.activeContext = selected;
+    saveConfiguration(currentConfig, scope.getEffectiveConfigPath());
+
+    await switchTo(scope, selected, currentConfig, {
+        announce: true,
+        treeName: 'local',
+        failureMessage: reason => `Failed to connect to context "${selected}": ${reason}`,
+    });
+}
+
+async function editContext(scope: CommandScope, item?: vscode.TreeItem): Promise<void> {
+    const contextName = contextNameOf(item);
+    if (!contextName) { return; }
+
+    const freshConfig = loadConfiguration(scope.getEffectiveConfigPath());
+    const ctx = freshConfig.contexts[contextName];
+    if (!ctx) { return; }
+
+    const server = await vscode.window.showInputBox({
+        title: `Edit Context: ${contextName}`,
+        prompt: 'Chronicle server URL',
+        value: ctx.server ?? '',
+        validateInput: requiredInput('Server URL is required'),
+    });
+    if (server === undefined) { return; }
+
+    ctx.server = server.trim();
+    saveConfiguration(freshConfig, scope.getEffectiveConfigPath());
+
+    if (contextName === scope.state.activeContextName) {
+        await switchTo(scope, contextName, freshConfig, { markActive: false });
+    } else {
+        refreshTree(scope, freshConfig);
+    }
+}
+
+function removeContext(config: Configuration, contextName: string): void {
+    delete config.contexts[contextName];
+    if (config.activeContext === contextName) {
+        const remaining = Object.keys(config.contexts);
+        config.activeContext = remaining.length > 0 ? remaining[0] : undefined;
+    }
+}
+
+function disconnectActiveContext(scope: CommandScope, config: Configuration): void {
+    const { state, statusBar } = scope;
+    state.clientManager?.disconnect();
+    state.clientManager = undefined;
+    state.activeContextName = config.activeContext;
+    updateStatusBar(statusBar, state.activeContextName, false);
+}
+
+async function deleteContext(scope: CommandScope, item?: vscode.TreeItem): Promise<void> {
+    const contextName = contextNameOf(item);
+    if (!contextName) { return; }
+
+    const confirmed = await vscode.window.showWarningMessage(
+        `Delete context "${contextName}"?`,
+        { modal: true },
+        'Delete'
+    );
+    if (confirmed !== 'Delete') { return; }
+
+    const freshConfig = loadConfiguration(scope.getEffectiveConfigPath());
+    removeContext(freshConfig, contextName);
+    saveConfiguration(freshConfig, scope.getEffectiveConfigPath());
+
+    if (contextName === scope.state.activeContextName) {
+        disconnectActiveContext(scope, freshConfig);
+    }
+    refreshTree(scope, freshConfig);
+}
+
+async function activateContext(scope: CommandScope, item?: vscode.TreeItem): Promise<void> {
+    const contextName = contextNameOf(item);
+    if (!contextName) { return; }
+
+    const freshConfig = loadConfiguration(scope.getEffectiveConfigPath());
+    if (!freshConfig.contexts[contextName]) { return; }
+
+    freshConfig.activeContext = contextName;
+    saveConfiguration(freshConfig, scope.getEffectiveConfigPath());
+
+    await switchTo(scope, contextName, freshConfig, { announce: true });
+}
+
 /**
  * Registers all context-management commands and returns their disposables.
  */
@@ -25,187 +235,13 @@ export function registerContextCommands(
     treeDataProvider: ChronicleTreeDataProvider,
     getEffectiveConfigPath: () => string | undefined
 ): vscode.Disposable[] {
-    async function runAddContextFlow(prefillName?: string): Promise<void> {
-        const name = await vscode.window.showInputBox({
-            title: 'Add Chronicle Context (1/2)',
-            prompt: 'Context name',
-            value: prefillName ?? '',
-            placeHolder: 'default',
-            validateInput: v => (!v?.trim() ? 'Name is required' : undefined),
-        });
-        if (!name) { return; }
+    const scope: CommandScope = { state, statusBar, treeDataProvider, getEffectiveConfigPath };
 
-        const server = await vscode.window.showInputBox({
-            title: 'Add Chronicle Context (2/2)',
-            prompt: 'Chronicle server URL',
-            placeHolder: 'chronicle://localhost:35000',
-            validateInput: v => (!v?.trim() ? 'Server URL is required' : undefined),
-        });
-        if (!server) { return; }
-
-        const freshConfig = loadConfiguration(getEffectiveConfigPath());
-        freshConfig.contexts[name.trim()] = {
-            server: server.trim(),
-        };
-        if (!freshConfig.activeContext) {
-            freshConfig.activeContext = name.trim();
-        }
-        saveConfiguration(freshConfig, getEffectiveConfigPath());
-
-        const shouldActivate = freshConfig.activeContext === name.trim() ||
-            await vscode.window.showQuickPick(['Yes', 'No'], {
-                placeHolder: `Set "${name.trim()}" as the active context?`,
-            }) === 'Yes';
-
-        if (shouldActivate) {
-            freshConfig.activeContext = name.trim();
-            saveConfiguration(freshConfig, getEffectiveConfigPath());
-            const ctx = freshConfig.contexts[name.trim()];
-            state.clientManager?.disconnect();
-            state.clientManager = new ChronicleClientManager(name.trim(), ctx, state.outputChannel);
-            state.activeContextName = name.trim();
-            updateStatusBar(statusBar, state.activeContextName, false, true);
-            try {
-                await state.clientManager.connect();
-                treeDataProvider.setClientManager(state.clientManager, state.activeContextName, freshConfig);
-                updateStatusBar(statusBar, state.activeContextName, true);
-            } catch (err) {
-                treeDataProvider.setClientManager(undefined, state.activeContextName, freshConfig);
-                updateStatusBar(statusBar, state.activeContextName, false);
-                vscode.window.showErrorMessage(`Failed to connect: ${err instanceof Error ? err.message : String(err)}`);
-            }
-        } else {
-            treeDataProvider.setClientManager(state.clientManager, state.activeContextName, freshConfig);
-        }
-    }
-
-    const setContextCmd = vscode.commands.registerCommand('narrator.setContext', async () => {
-        const currentConfig = loadConfiguration(getEffectiveConfigPath());
-        const contextNames = Object.keys(currentConfig.contexts);
-        if (contextNames.length === 0) {
-            const configLocation = getEffectiveConfigPath() ?? getConfigPath();
-            vscode.window.showWarningMessage(`No contexts found in ${configLocation}`);
-            return;
-        }
-
-        const selected = await vscode.window.showQuickPick(contextNames, {
-            placeHolder: 'Select active context',
-        });
-        if (!selected) { return; }
-
-        currentConfig.activeContext = selected;
-        saveConfiguration(currentConfig, getEffectiveConfigPath());
-
-        const newContext = currentConfig.contexts[selected];
-        state.clientManager?.disconnect();
-        state.clientManager = new ChronicleClientManager(selected, newContext, state.outputChannel);
-        state.activeContextName = selected;
-        updateStatusBar(statusBar, selected, false, true);
-        try {
-            await state.clientManager.connect();
-            treeDataProvider.setClientManager(state.clientManager, selected, currentConfig);
-            updateStatusBar(statusBar, selected, true);
-            vscode.window.showInformationMessage(`Switched to context: ${selected}`);
-        } catch (err) {
-            treeDataProvider.setClientManager(undefined, selected, currentConfig);
-            updateStatusBar(statusBar, selected, false);
-            vscode.window.showErrorMessage(`Failed to connect to context "${selected}": ${err instanceof Error ? err.message : String(err)}`);
-        }
-    });
-
-    const addContextCmd = vscode.commands.registerCommand('narrator.addContext', () => runAddContextFlow());
-
-    const editContextCmd = vscode.commands.registerCommand('narrator.editContext', async (item?: vscode.TreeItem) => {
-        const contextName = typeof item?.label === 'string' ? item.label : undefined;
-        if (!contextName) { return; }
-
-        const freshConfig = loadConfiguration(getEffectiveConfigPath());
-        const ctx = freshConfig.contexts[contextName];
-        if (!ctx) { return; }
-
-        const server = await vscode.window.showInputBox({
-            title: `Edit Context: ${contextName}`,
-            prompt: 'Chronicle server URL',
-            value: ctx.server ?? '',
-            validateInput: v => (!v?.trim() ? 'Server URL is required' : undefined),
-        });
-        if (server === undefined) { return; }
-
-        ctx.server = server.trim();
-        saveConfiguration(freshConfig, getEffectiveConfigPath());
-
-        if (contextName === state.activeContextName) {
-            state.clientManager?.disconnect();
-            state.clientManager = new ChronicleClientManager(contextName, ctx, state.outputChannel);
-            updateStatusBar(statusBar, contextName, false, true);
-            try {
-                await state.clientManager.connect();
-                treeDataProvider.setClientManager(state.clientManager, state.activeContextName, freshConfig);
-                updateStatusBar(statusBar, contextName, true);
-            } catch (err) {
-                treeDataProvider.setClientManager(undefined, state.activeContextName, freshConfig);
-                updateStatusBar(statusBar, contextName, false);
-                vscode.window.showErrorMessage(`Failed to connect: ${err instanceof Error ? err.message : String(err)}`);
-            }
-        } else {
-            treeDataProvider.setClientManager(state.clientManager, state.activeContextName, freshConfig);
-        }
-    });
-
-    const deleteContextCmd = vscode.commands.registerCommand('narrator.deleteContext', async (item?: vscode.TreeItem) => {
-        const contextName = typeof item?.label === 'string' ? item.label : undefined;
-        if (!contextName) { return; }
-
-        const confirmed = await vscode.window.showWarningMessage(
-            `Delete context "${contextName}"?`,
-            { modal: true },
-            'Delete'
-        );
-        if (confirmed !== 'Delete') { return; }
-
-        const freshConfig = loadConfiguration(getEffectiveConfigPath());
-        delete freshConfig.contexts[contextName];
-        if (freshConfig.activeContext === contextName) {
-            const remaining = Object.keys(freshConfig.contexts);
-            freshConfig.activeContext = remaining.length > 0 ? remaining[0] : undefined;
-        }
-        saveConfiguration(freshConfig, getEffectiveConfigPath());
-
-        if (contextName === state.activeContextName) {
-            state.clientManager?.disconnect();
-            state.clientManager = undefined;
-            state.activeContextName = freshConfig.activeContext;
-            updateStatusBar(statusBar, state.activeContextName, false);
-        }
-        treeDataProvider.setClientManager(state.clientManager, state.activeContextName, freshConfig);
-    });
-
-    const activateContextCmd = vscode.commands.registerCommand('narrator.activateContext', async (item?: vscode.TreeItem) => {
-        const contextName = typeof item?.label === 'string' ? item.label : undefined;
-        if (!contextName) { return; }
-
-        const freshConfig = loadConfiguration(getEffectiveConfigPath());
-        const ctx = freshConfig.contexts[contextName];
-        if (!ctx) { return; }
-
-        freshConfig.activeContext = contextName;
-        saveConfiguration(freshConfig, getEffectiveConfigPath());
-
-        state.clientManager?.disconnect();
-        state.clientManager = new ChronicleClientManager(contextName, ctx, state.outputChannel);
-        state.activeContextName = contextName;
-        updateStatusBar(statusBar, contextName, false, true);
-        try {
-            await state.clientManager.connect();
-            treeDataProvider.setClientManager(state.clientManager, state.activeContextName, freshConfig);
-            updateStatusBar(statusBar, contextName, true);
-            vscode.window.showInformationMessage(`Switched to context: ${contextName}`);
-        } catch (err) {
-            treeDataProvider.setClientManager(undefined, state.activeContextName, freshConfig);
-            updateStatusBar(statusBar, contextName, false);
-            vscode.window.showErrorMessage(`Failed to connect: ${err instanceof Error ? err.message : String(err)}`);
-        }
-    });
-
-    return [setContextCmd, addContextCmd, editContextCmd, deleteContextCmd, activateContextCmd];
+    return [
+        vscode.commands.registerCommand('narrator.setContext', () => setContext(scope)),
+        vscode.commands.registerCommand('narrator.addContext', () => addContext(scope)),
+        vscode.commands.registerCommand('narrator.editContext', (item?: vscode.TreeItem) => editContext(scope, item)),
+        vscode.commands.registerCommand('narrator.deleteContext', (item?: vscode.TreeItem) => deleteContext(scope, item)),
+        vscode.commands.registerCommand('narrator.activateContext', (item?: vscode.TreeItem) => activateContext(scope, item)),
+    ];
 }
